@@ -19,6 +19,9 @@ env/
 *.secret
 *.token
 
+# Local notes / planning docs
+docs/
+
 # Benchmark outputs
 results/
 results_*/

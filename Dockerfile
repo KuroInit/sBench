@@ -40,7 +40,7 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
 WORKDIR /workspace
 COPY . /workspace
 
-RUN chmod +x /workspace/docker/entrypoint.sh /workspace/run_sweep.sh
+RUN chmod +x /workspace/docker/entrypoint.sh /workspace/scripts/run_sweep.sh
 
 ENTRYPOINT ["/workspace/docker/entrypoint.sh"]
 CMD ["run"]

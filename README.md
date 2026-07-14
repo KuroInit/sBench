@@ -6,6 +6,18 @@ The project mirrors the old `s_mfu` sweep/analyze workflow but does not import
 MoE-CAP. Runtime records are collected by `sbench_probe`, then `sbench` assembles
 architecture-specific components to estimate utilization.
 
+## Layout
+
+```text
+configs/        User-editable sweep and dataset configs
+docs/           Design notes and planning references
+docker/         Container entrypoint scripts
+scripts/        Local and NSCC run scripts
+sbench/         Dataset loaders, estimator, adapters, and runners
+sbench_probe/   SGLang probe and entrypoint
+tests/          Unit tests
+```
+
 ## Run
 
 Edit the single sweep file:
@@ -19,7 +31,13 @@ The harness runs every selected model against every selected dataset and batch
 size in that file.
 
 ```bash
-./run_sweep.sh
+./scripts/run_sweep.sh
+```
+
+On NSCC, submit the PBS script from the repo root:
+
+```bash
+qsub scripts/nscc_job.pbs
 ```
 
 ## Docker
