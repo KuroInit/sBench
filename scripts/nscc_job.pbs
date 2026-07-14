@@ -8,21 +8,32 @@
 set -euo pipefail
 
 cd "${PBS_O_WORKDIR}"
+if [[ -f ./scripts/nscc_env.sh ]]; then
+  JOB_REPO_DIR="$(pwd)"
+elif [[ -f ./nscc_env.sh && "$(basename "$(pwd)")" == "scripts" ]]; then
+  JOB_REPO_DIR="$(cd .. && pwd)"
+else
+  echo "Could not locate nscc_env.sh. Submit from the repo root or scripts/." >&2
+  exit 1
+fi
 
 echo "=== Job Info ==="
 echo "PWD: $(pwd)"
+echo "JOB_REPO_DIR: ${JOB_REPO_DIR}"
 echo "HOST: $(hostname)"
 echo "PBS_JOBID: ${PBS_JOBID}"
 echo "PBS_O_WORKDIR: ${PBS_O_WORKDIR}"
 echo "==============="
 
-source ./scripts/nscc_env.sh
+source "${JOB_REPO_DIR}/scripts/nscc_env.sh"
 
-module purge
+module load gcc/11.4.0-nscc
 module load python/3.12.1-gcc11
 module load cuda/12.2.1
 module load singularity/4.3.1
 
+export PYTHON_LIBDIR="$(python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
+export LD_LIBRARY_PATH="${PYTHON_LIBDIR}:${LD_LIBRARY_PATH:-}"
 export CUDA_HOME="$(dirname "$(dirname "$(which nvcc)")")"
 export CUDA_PATH="${CUDA_HOME}"
 export PATH="${CUDA_HOME}/bin:${PATH}"
@@ -60,10 +71,12 @@ echo "SBENCH_GPU_TYPE=${SBENCH_GPU_TYPE}"
 echo "AUTO_SELECT_GPUS=${AUTO_SELECT_GPUS}"
 echo "DISABLE_RADIX_CACHE=${DISABLE_RADIX_CACHE}"
 echo "CUDA_HOME=${CUDA_HOME}"
+echo "PYTHON_LIBDIR=${PYTHON_LIBDIR}"
 echo "nvcc=$(which nvcc)"
 echo "singularity=$(which singularity)"
 echo "==================="
 
+python --version
 nvcc --version
 singularity --version
 nvidia-smi || true
