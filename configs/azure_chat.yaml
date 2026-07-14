@@ -1,0 +1,11 @@
+benchmark_type: chat
+dataset_names: [azure_chat]
+fixed_length_mode: false
+target_output_tokens: 128
+num_samples: 200
+precision: bfloat16
+
+# Azure chat is usually provided as a local CSV/JSONL trace.
+# Set S_MFU_AZURE_CHAT_PATH or path. Hugging Face source can be configured with:
+# hf_dataset:
+# dataset_split: train

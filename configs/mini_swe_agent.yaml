@@ -1,0 +1,22 @@
+benchmark_type: agentic
+dataset_names: [mini_swe_agent]
+fixed_length_mode: false
+runner: mini_swe_agent
+subset: lite
+split: dev
+environment_class: singularity
+precision: bfloat16
+target_output_tokens: 0
+require_output_artifacts: true
+timeout_seconds: 14400
+extra_args: ["--slice", "0:8", "--redo-existing"]
+
+# Optional:
+# binary: mini-extra
+# output_flag: --output
+# mini_model_name: openai/<served_model_name>
+# timeout_seconds: 14400
+# expected_output_globs: ["*.json", "*.jsonl", "preds*", "predictions*"]
+# instance_ids:
+#   - sympy__sympy-15599
+# extra_args: []

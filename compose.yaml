@@ -1,0 +1,30 @@
+services:
+  sbench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sbench:sglang-0.5.9-cu128
+    ipc: host
+    shm_size: 16gb
+    gpus: all
+    environment:
+      HF_HOME: /cache/huggingface
+      SBENCH_WORKSPACE: ${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}
+      RESULTS_DIR: ${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}/results
+      SWEEP_CONFIG: ${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}/configs/sweep.yaml
+      CHECKPOINT_PATH: ${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}/results/checkpoint.yaml
+      DISABLE_RADIX_CACHE: "1"
+      SBENCH_GPU_TYPE: ${SBENCH_GPU_TYPE:-NVIDIA GeForce RTX 3070 Ti}
+      ANALYZE_GPU_TYPE: ${ANALYZE_GPU_TYPE:-NVIDIA GeForce RTX 3070 Ti}
+      HF_TOKEN: ${HF_TOKEN:-}
+      S_MFU_AZURE_CHAT_PATH: ${S_MFU_AZURE_CHAT_PATH:-}
+      S_MFU_SHAREGPT_PATH: ${S_MFU_SHAREGPT_PATH:-}
+      S_MFU_MMLU_PRO_PATH: ${S_MFU_MMLU_PRO_PATH:-}
+      S_MFU_SWEBENCH_PATH: ${S_MFU_SWEBENCH_PATH:-}
+    volumes:
+      - .:${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}
+      - .:/workspace
+      - ${HF_HOME:-${HOME}/.cache/huggingface}:/cache/huggingface
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "30000:30000"

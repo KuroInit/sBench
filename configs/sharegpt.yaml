@@ -1,0 +1,9 @@
+benchmark_type: chat
+dataset_names: [sharegpt]
+fixed_length_mode: false
+target_output_tokens: 128
+num_samples: 200
+precision: bfloat16
+hf_dataset: json
+hf_data_files: https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
+dataset_split: train

@@ -1,0 +1,520 @@
+# sBench Plan: Newer-SGLang Lightweight Probe + Component-Wise S-MFU/S-MBU
+
+## Goal
+
+Build `sBench` as a fresh benchmarking/estimation layer in `/home/kur0/Documents/sBench`.
+
+It should do two things:
+
+1. Run on newer SGLang versions with a lightweight probe that captures the runtime fields needed for S-MFU/S-MBU.
+2. Estimate S-MFU/S-MBU by assembling architecture components, so Qwen, DeepSeek, linear-attention, sparse-attention, hybrid-attention, dense FFN, and MoE pieces can be mixed and matched per LLM.
+
+`/home/kur0/Documents/s_mfu` is read-only reference material. Do not mutate it.
+
+## Reference Points
+
+Use the old MoE-CAP probe only as a behavioral reference:
+
+```text
+/home/kur0/Documents/s_mfu/MoE-CAP/moe_cap/systems/sglang.py
+/home/kur0/Documents/s_mfu/MoE-CAP/moe_cap/utils/basic_utils.py
+/home/kur0/Documents/s_mfu/MoE-CAP/moe_cap/utils/qwen_utils.py
+/home/kur0/Documents/s_mfu/MoE-CAP/moe_cap/utils/deepseek_utils.py
+/home/kur0/Documents/s_mfu/MoE-CAP/moe_cap/utils/continuous_batching_utils.py
+```
+
+Current SGLang `main` already exposes useful probe surfaces in `ModelRunnerOutput`:
+
+```text
+expert_distribution_metrics
+routed_experts_output
+indexer_topk_output
+```
+
+and wraps forwards with:
+
+```text
+get_global_expert_distribution_recorder().with_forward_pass(...)
+```
+
+So the new probe should not blindly copy MoE-CAP's older full `ModelRunner.forward` replacement. Prefer a narrow wrapper that preserves SGLang's original forward implementation and records data after the original method returns.
+
+Upstream references checked:
+
+```text
+https://raw.githubusercontent.com/sgl-project/sglang/main/python/sglang/srt/model_executor/model_runner.py
+https://raw.githubusercontent.com/sgl-project/sglang/main/python/sglang/srt/eplb/expert_distribution.py
+https://raw.githubusercontent.com/sgl-project/sglang/main/python/sglang/srt/layers/moe/topk.py
+```
+
+## Runtime Probe Design
+
+Create a new SGLang-compatible probe package, separate from the estimator:
+
+```text
+sbench_probe/
+  __init__.py
+  sglang_entrypoint.py
+  sglang_probe.py
+  record_schema.py
+  control_api.py
+```
+
+### Probe Responsibilities
+
+For each actual SGLang forward pass, write one JSONL record with:
+
+```text
+forward_pass_id
+forward_mode                 # prefill | decode
+latency                      # measured forward latency in seconds
+seq_lens_sum                 # physical forward context mass
+processed_tokens             # new tokens processed/written when available
+batch_size
+gpu_num
+gpu_raw_type
+expert_activation            # average active experts per MoE layer, if available
+expert_utilization           # optional
+per_req_info                 # prefill request/chunk metadata, if available
+raw_probe_source             # expert_distribution_metrics | routed_experts_output | fallback
+```
+
+This is the stable schema consumed by the component estimator.
+
+### Probe Strategy
+
+Implement an adapter with this priority order:
+
+1. **SGLang-native metrics path**
+   - Wrap `ModelRunner.forward` with a small compatibility wrapper.
+   - Call the original `ModelRunner.forward` unchanged.
+   - Measure latency around the original call with CUDA synchronization when CUDA is available.
+   - Read `output.expert_distribution_metrics` if present.
+   - Read `output.routed_experts_output` / `output.indexer_topk_output` if present and useful.
+   - Extract forward batch metadata from `forward_batch`.
+
+2. **Expert-distribution fallback path**
+   - If newer native fields are unavailable but SGLang still has `get_global_expert_distribution_recorder()`, use recorder dump/object metrics if available.
+   - Do not replace SGLang's recorder implementation unless absolutely required.
+
+3. **Timing-only fallback path**
+   - If expert activation cannot be captured, still record latency, mode, batch size, seq lens, and processed tokens.
+   - Set `expert_activation = 0` and `raw_probe_source = timing_only`.
+   - Component estimator should still produce dense/attention/cache utilization and flag MoE utilization as under-estimated.
+
+### What Not To Copy From Old MoE-CAP
+
+Avoid these unless no newer SGLang-compatible path exists:
+
+```text
+Replacing SGLang's full _ExpertDistributionRecorderReal implementation
+Forging pickled ExpertDistributionReq classes
+Replacing private gatherers like _SelectExpertsSinglePassGatherer
+Hard-patching TopK.forward_cuda as the primary path
+Replacing ModelRunner.forward with a reimplementation that calls _forward_raw directly
+```
+
+A narrow wrapper is acceptable:
+
+```python
+original_forward = ModelRunner.forward
+
+def probed_forward(self, forward_batch, *args, **kwargs):
+    start = synchronize_and_time()
+    output = original_forward(self, forward_batch, *args, **kwargs)
+    latency = synchronize_and_time() - start
+    record = build_probe_record(self, forward_batch, output, latency)
+    write_record_if_rank0(record)
+    return output
+```
+
+This preserves new SGLang behavior such as `ModelRunnerOutput`, expert metrics, routed expert capture, DSA/indexer capture, elastic EP, canary logic, and future internal forward changes.
+
+## Component-Wise Estimator Design
+
+Create a separate estimator package:
+
+```text
+sbench/
+  __init__.py
+  descriptor.py
+  adapters.py
+  components.py
+  estimator.py
+  overrides.py
+```
+
+The probe only measures runtime facts. The estimator owns all model math.
+
+### Runtime Record Input
+
+The estimator consumes probe JSONL records shaped like:
+
+```text
+forward_mode
+latency
+seq_lens_sum
+processed_tokens
+batch_size
+expert_activation
+per_req_info
+gpu_raw_type
+num_gpus
+```
+
+Preserve current MoE-CAP runtime behavior:
+
+```text
+prefill_tp = seq_lens_sum / latency
+decoding_tp = batch_size / latency
+```
+
+Packed/chunked prefill rule:
+
+```text
+throughput uses seq_lens_sum / latency
+cache write mass uses processed_tokens when available
+fallback processed_tokens = sum(per_req_info[*].extend_len)
+fallback final fallback = seq_lens_sum
+```
+
+Aggregation rule:
+
+```text
+latency_weighted_metric = sum(metric_i * latency_i) / sum(latency_i)
+```
+
+## Architecture Descriptor
+
+Build a descriptor from Hugging Face config plus YAML overrides:
+
+```yaml
+architecture:
+  attention:
+    type: mha | gqa | mla | sparse | linear | hybrid
+  cache:
+    type: kv | latent_kv | sparse_kv | recurrent_state
+  ffn:
+    dense_layers: int
+    dense_intermediate_size: int
+  moe:
+    enabled: bool
+    moe_layers: int
+    routed_experts: int
+    shared_experts: int
+    top_k: int
+    expert_intermediate_size: int
+  runtime:
+    precision_bytes: float
+    num_gpus: int
+    peak_bandwidth_tb: float
+    peak_flops_tf: float
+```
+
+YAML override precedence:
+
+```text
+HF config defaults < adapter inferred values < YAML overrides
+```
+
+This is important because newer model configs may rename fields or introduce architecture components before the estimator knows them automatically.
+
+## Component Model
+
+Each component returns independent cost pieces:
+
+```python
+ComponentCost(
+    bandwidth_units: float,
+    flops_units: float,
+    cache_units: float,
+    attention_score_units: float,
+)
+```
+
+Estimator sums selected components:
+
+```text
+total_flops = sum(component.flops_units + component.attention_score_units)
+total_bytes = sum(component.bandwidth_units + component.cache_units) * precision_bytes
+```
+
+Then:
+
+```text
+S-MFU = total_flops * 2 * throughput / (num_gpus * peak_flops_tf / 2)
+S-MBU = total_bytes / latency / (num_gpus * peak_bandwidth_tb)
+```
+
+Keep fractions internally. Reports can multiply by 100.
+
+## Required Components
+
+Implement these as independent modules/classes:
+
+```text
+AttentionComponent
+CacheComponent
+DenseFFNComponent
+MoEComponent
+RouterComponent
+LinearAttentionComponent
+SparseAttentionComponent
+HybridAttentionComponent
+```
+
+### Cache Components
+
+```text
+KV cache:
+  per_token = 2 * layers * head_dim * kv_heads
+
+DeepSeek MLA latent KV:
+  per_token = layers * (kv_lora_rank + qk_rope_head_dim)
+
+Sparse KV:
+  per_token = KV cache per token * sparse_factor
+
+Linear/recurrent state:
+  per_token = layers * recurrent_state_size
+```
+
+### Attention Components
+
+MHA/GQA projection size:
+
+```text
+hidden * (attention_heads * head_dim + 2 * kv_heads * head_dim)
++ attention_heads * head_dim * hidden
+```
+
+DeepSeek MLA projection size:
+
+```text
+q_head_dim = qk_rope_head_dim + qk_nope_head_dim
+
+base = hidden * (kv_lora_rank + qk_rope_head_dim)
+     + kv_lora_rank * attention_heads * (q_head_dim - qk_rope_head_dim + v_head_dim)
+     + v_head_dim * attention_heads * hidden
+
+if q_lora_rank exists:
+  q_size = hidden * q_lora_rank + q_lora_rank * attention_heads * q_head_dim
+else:
+  q_size = hidden * attention_heads * q_head_dim
+
+attention_size_per_token = base + q_size
+```
+
+Sparse attention:
+
+```text
+attention_score_cost = dense_attention_score_cost * sparse_factor
+```
+
+Linear attention:
+
+```text
+attention_score_cost = recurrent_state_update_cost
+cache_cost = recurrent_state_read_write_cost
+```
+
+The exact linear-attention state formula should be supplied by YAML override until a specific model family is validated.
+
+### MoE Components
+
+```text
+expert_size = expert_intermediate_size * 3 * hidden / 1e12
+shared_expert_size = shared_expert_intermediate_size * 3 * hidden / 1e12
+                     if explicit shared size exists
+                     else shared_experts * expert_size
+
+MoE bandwidth = moe_layers * (expert_activation * expert_size + shared_expert_size)
+MoE FLOPs     = moe_layers * (expert_size + shared_expert_size)
+```
+
+Router cost is separate:
+
+```text
+router_flops = moe_layers * tokens * hidden * routed_experts
+```
+
+Include it as a component so it can be disabled or scaled if top-k/router implementation differs.
+
+## Adapter Registry
+
+Adapters choose descriptors and component sets. They should not directly compute S-MFU/S-MBU.
+
+Required adapters:
+
+```text
+DenseTransformerAdapter
+QwenMoEAdapter
+QwenHybridAdapter
+DeepSeekMLAAdapter
+DeepSeekSparseAdapter
+LinearAttentionAdapter
+```
+
+Selection rules:
+
+```text
+DeepSeekSparseAdapter:
+  DeepSeek model/config + sparse/dsa attention fields or override
+
+DeepSeekMLAAdapter:
+  kv_lora_rank + qk_rope_head_dim
+
+QwenHybridAdapter:
+  Qwen Next / hybrid / linear/sparse attention config or override
+
+QwenMoEAdapter:
+  Qwen config + moe_intermediate_size
+
+LinearAttentionAdapter:
+  attention.type = linear override or known linear-attention config
+
+DenseTransformerAdapter:
+  fallback
+```
+
+Component mix examples:
+
+```text
+Qwen3 MoE:
+  GQA/MHA Attention + KV Cache + DenseFFN + MoE + Router
+
+Qwen3-Next / hybrid:
+  HybridAttention + chosen cache component + DenseFFN + MoE + Router
+
+DeepSeek V3/V4 MLA:
+  MLA Attention + LatentKV Cache + DenseFFN + MoE + Router
+
+DeepSeek sparse attention:
+  Sparse/DSA Attention + SparseKV or LatentKV Cache + DenseFFN + MoE + Router
+
+Linear attention model:
+  LinearAttention + RecurrentState Cache + DenseFFN/MoE as config dictates
+```
+
+## Output Files
+
+Probe output:
+
+```text
+results/<run_id>/probe_records.jsonl
+results/<run_id>/probe_metadata.json
+```
+
+Estimator output:
+
+```text
+results/<run_id>/component_metrics.json
+results/<run_id>/component_breakdown.jsonl
+```
+
+`component_breakdown.jsonl` should show per-forward component contributions:
+
+```text
+forward_pass_id
+forward_mode
+latency
+component_name
+bandwidth_units
+flops_units
+cache_units
+attention_score_units
+```
+
+This makes debugging future architectures much easier.
+
+## Tests
+
+### Probe Tests
+
+Use fake SGLang-like classes. Do not require SGLang installation for unit tests.
+
+Test cases:
+
+```text
+wrapper calls original forward exactly once
+wrapper returns original output unchanged
+wrapper records latency
+wrapper extracts expert_distribution_metrics when present
+wrapper extracts routed_experts_output when present
+wrapper falls back to timing_only when no expert data exists
+wrapper derives processed_tokens from per_req_info
+wrapper only writes records on rank 0 when rank information exists
+```
+
+### Descriptor Tests
+
+```text
+Qwen3-like config identifies MoE layers, dense layers, top-k, expert size
+DeepSeek-like config identifies MLA and latent KV cache
+YAML override forces sparse, hybrid, or linear attention
+YAML override supplies recurrent_state_size for linear attention
+```
+
+### Component Tests
+
+```text
+MHA/GQA cache size matches reference formula
+MLA cache size matches DeepSeek reference formula
+Sparse attention scales attention score
+Linear/recurrent cache uses recurrent state size
+MoE bandwidth uses expert_activation
+MoE FLOPs remain based on expert_size/shared experts
+Router component is optional and separately visible
+```
+
+### End-to-End Tests
+
+```text
+packed prefill throughput = seq_lens_sum / latency
+packed prefill cache tokens = processed_tokens when provided
+decode throughput = batch_size / latency
+S-MFU/S-MBU are latency-weighted
+component breakdown sums match final aggregate metrics
+```
+
+### Golden Compatibility Tests
+
+Use synthetic records to match old MoE-CAP formula shape for:
+
+```text
+Qwen MoE
+Qwen3 MoE
+DeepSeek MLA MoE
+```
+
+Do not import MoE-CAP in tests; copy expected formulas into test helpers.
+
+## Implementation Order
+
+1. Create `record_schema.py` and estimator dataclasses.
+2. Implement component estimator and component breakdown output.
+3. Implement descriptor builder + YAML override merge.
+4. Implement adapter registry and component selection.
+5. Implement fake-tested SGLang probe wrapper.
+6. Add SGLang entrypoint that imports/patches probe then launches SGLang server.
+7. Add README usage for launching newer SGLang with probe enabled.
+8. Add tests and smoke scripts.
+
+## Acceptance Criteria
+
+In `/home/kur0/Documents/sBench`:
+
+```bash
+python -m compileall -q sbench sbench_probe tests
+python -m pytest -q
+```
+
+If `pytest` is unavailable, compileall and a plain Python smoke script must pass, and the missing pytest dependency should be reported.
+
+## Non-Goals
+
+Do not mutate `/home/kur0/Documents/s_mfu`.
+Do not depend on MoE-CAP imports.
+Do not replace SGLang internals more than necessary.
+Do not assume DeepSeek-V4, Qwen-Next, sparse attention, or linear attention formulas are fully validated without real model configs and probe records.
+Do not hard-code a model-name formula table as the final design.

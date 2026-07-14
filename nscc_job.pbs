@@ -1,0 +1,75 @@
+#!/bin/bash
+#PBS -N sbench_sweep
+#PBS -l select=1:ncpus=64:ngpus=4:mem=440gb
+#PBS -l walltime=06:00:00
+#PBS -j oe
+#PBS -o /home/users/ntu/ashwin01/scratch/fyp/sbench_sweep.log
+
+set -euo pipefail
+
+cd "${PBS_O_WORKDIR}"
+
+echo "=== Job Info ==="
+echo "PWD: $(pwd)"
+echo "HOST: $(hostname)"
+echo "PBS_JOBID: ${PBS_JOBID}"
+echo "PBS_O_WORKDIR: ${PBS_O_WORKDIR}"
+echo "==============="
+
+source ./nscc_env.sh
+
+module purge
+module load python/3.12.1-gcc11
+module load cuda/12.2.1
+
+export CUDA_HOME="$(dirname "$(dirname "$(which nvcc)")")"
+export CUDA_PATH="${CUDA_HOME}"
+export PATH="${CUDA_HOME}/bin:${PATH}"
+export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+export FLASHINFER_CUDA_HOME="${CUDA_HOME}"
+
+# Avoid stale compiled kernels hardcoding a different CUDA installation.
+rm -rf "${HOME}/.cache/flashinfer"
+rm -rf "${HOME}/.cache/torch_extensions"
+
+mkdir -p "${HF_HOME}"
+mkdir -p "${RESULTS_DIR}"
+mkdir -p "${SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR}"
+mkdir -p "${APPTAINER_CACHEDIR}"
+mkdir -p "${APPTAINER_TMPDIR}"
+mkdir -p "${SBENCH_SIF_CACHE_DIR}"
+
+cd "${REPO_DIR}"
+source "${VENV_DIR}/bin/activate"
+
+echo "=== Harness Env ==="
+echo "REPO_DIR=${REPO_DIR}"
+echo "VENV_DIR=${VENV_DIR}"
+echo "HF_HOME=${HF_HOME}"
+echo "RESULTS_DIR=${RESULTS_DIR}"
+echo "SWEEP_CONFIG=${SWEEP_CONFIG}"
+echo "CHECKPOINT_PATH=${CHECKPOINT_PATH}"
+echo "SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR=${SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR}"
+echo "APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR}"
+echo "APPTAINER_TMPDIR=${APPTAINER_TMPDIR}"
+echo "SBENCH_SIF_CACHE_DIR=${SBENCH_SIF_CACHE_DIR}"
+echo "SBENCH_PREWARM_MINI_SWE=${SBENCH_PREWARM_MINI_SWE}"
+echo "S_MFU_AZURE_CHAT_PATH=${S_MFU_AZURE_CHAT_PATH}"
+echo "SBENCH_GPU_TYPE=${SBENCH_GPU_TYPE}"
+echo "AUTO_SELECT_GPUS=${AUTO_SELECT_GPUS}"
+echo "DISABLE_RADIX_CACHE=${DISABLE_RADIX_CACHE}"
+echo "CUDA_HOME=${CUDA_HOME}"
+echo "nvcc=$(which nvcc)"
+echo "==================="
+
+nvcc --version
+nvidia-smi || true
+
+if [[ "${SBENCH_PREWARM_MINI_SWE}" == "1" ]]; then
+  echo "=== Prewarming mini-SWE Singularity images ==="
+  python -m sbench.mini_swe_prewarm --sweep-config "${SWEEP_CONFIG}"
+  echo "=== Prewarm complete ==="
+fi
+
+python orchestrator.py
+python analyze.py "${RESULTS_DIR}"

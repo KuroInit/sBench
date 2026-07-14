@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment and secrets
+.env
+.env.*
+*.secret
+*.token
+
+# Benchmark outputs
+results/
+results_*/
+checkpoint.yaml
+raw_values.csv
+component_breakdown.csv
+failure_*.json
+metadata_*.json
+server_records_*.jsonl
+detailed_results_*.jsonl
+mini_swe_agent_run_*.json
+mini_swe_agent_stdout_*.log
+mini_swe_agent_stderr_*.log
+minsweagent.log
+preds.json
+preds.jsonl
+predictions*
+exit_statuses_*.yaml
+*.traj.json
+*.patch
+
+# Generated plots and logs
+*.log
+*.out
+*.err
+*.png
+
+# Hugging Face / dataset caches
+hf_cache/
+datasets/
+models--*/
+
+# Singularity / Apptainer artifacts
+apptainer_cache/
+apptainer_tmp/
+singularity_cache/
+singularity_tmp/
+sif_cache/
+*.sif
+*.simg
+
+# Docker/build artifacts
+.docker/
+*.tar
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/

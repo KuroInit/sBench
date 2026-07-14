@@ -1,0 +1,8 @@
+benchmark_type: reasoning
+dataset_names: [mmlu_pro]
+fixed_length_mode: false
+target_output_tokens: 16
+num_samples: 200
+precision: bfloat16
+hf_dataset: TIGER-Lab/MMLU-Pro
+dataset_split: test

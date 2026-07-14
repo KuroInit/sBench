@@ -1,0 +1,8 @@
+benchmark_type: agentic
+dataset_names: [swe_bench]
+fixed_length_mode: false
+target_output_tokens: 512
+num_samples: 32
+precision: bfloat16
+hf_dataset: princeton-nlp/SWE-bench_Verified
+dataset_split: test

@@ -1,0 +1,7 @@
+benchmark_type: prefill
+dataset_names: [batched_prefill]
+fixed_length_mode: true
+target_input_tokens: 2048
+target_output_tokens: 1
+num_samples: 8
+precision: bfloat16
