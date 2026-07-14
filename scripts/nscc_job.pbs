@@ -7,25 +7,27 @@
 
 set -euo pipefail
 
-cd "${PBS_O_WORKDIR}"
-if [[ -f ./scripts/nscc_env.sh ]]; then
-  JOB_REPO_DIR="$(pwd)"
-elif [[ -f ./nscc_env.sh && "$(basename "$(pwd)")" == "scripts" ]]; then
-  JOB_REPO_DIR="$(cd .. && pwd)"
-else
-  echo "Could not locate nscc_env.sh. Submit from the repo root or scripts/." >&2
+JOB_BASE="/home/users/ntu/ashwin01/scratch"
+JOB_FYP_DIR="${JOB_BASE}/fyp"
+JOB_REPO_DIR="${JOB_FYP_DIR}/sBench"
+JOB_ENV_FILE="${JOB_REPO_DIR}/scripts/nscc_env.sh"
+
+if [[ ! -f "${JOB_ENV_FILE}" ]]; then
+  echo "Could not locate ${JOB_ENV_FILE}" >&2
   exit 1
 fi
+cd "${JOB_REPO_DIR}"
 
 echo "=== Job Info ==="
 echo "PWD: $(pwd)"
 echo "JOB_REPO_DIR: ${JOB_REPO_DIR}"
+echo "JOB_ENV_FILE: ${JOB_ENV_FILE}"
 echo "HOST: $(hostname)"
 echo "PBS_JOBID: ${PBS_JOBID}"
 echo "PBS_O_WORKDIR: ${PBS_O_WORKDIR}"
 echo "==============="
 
-source "${JOB_REPO_DIR}/scripts/nscc_env.sh"
+source "${JOB_ENV_FILE}"
 
 module load gcc/11.4.0-nscc
 module load python/3.12.1-gcc11
@@ -41,8 +43,8 @@ export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
 export FLASHINFER_CUDA_HOME="${CUDA_HOME}"
 
 # Avoid stale compiled kernels hardcoding a different CUDA installation.
-rm -rf "${HOME}/.cache/flashinfer"
-rm -rf "${HOME}/.cache/torch_extensions"
+rm -rf "/home/users/ntu/ashwin01/.cache/flashinfer"
+rm -rf "/home/users/ntu/ashwin01/.cache/torch_extensions"
 
 mkdir -p "${HF_HOME}"
 mkdir -p "${RESULTS_DIR}"
@@ -51,7 +53,7 @@ mkdir -p "${APPTAINER_CACHEDIR}"
 mkdir -p "${APPTAINER_TMPDIR}"
 mkdir -p "${SBENCH_SIF_CACHE_DIR}"
 
-cd "${REPO_DIR}"
+cd "/home/users/ntu/ashwin01/scratch/fyp/sBench"
 source "${VENV_DIR}/bin/activate"
 
 echo "=== Harness Env ==="
@@ -87,5 +89,5 @@ if [[ "${SBENCH_PREWARM_MINI_SWE}" == "1" ]]; then
   echo "=== Prewarm complete ==="
 fi
 
-python orchestrator.py
-python analyze.py "${RESULTS_DIR}"
+python "/home/users/ntu/ashwin01/scratch/fyp/sBench/orchestrator.py"
+python "/home/users/ntu/ashwin01/scratch/fyp/sBench/analyze.py" "${RESULTS_DIR}"
