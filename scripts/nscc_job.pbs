@@ -21,6 +21,7 @@ source ./scripts/nscc_env.sh
 module purge
 module load python/3.12.1-gcc11
 module load cuda/12.2.1
+module load singularity/4.3.1
 
 export CUDA_HOME="$(dirname "$(dirname "$(which nvcc)")")"
 export CUDA_PATH="${CUDA_HOME}"
@@ -60,9 +61,11 @@ echo "AUTO_SELECT_GPUS=${AUTO_SELECT_GPUS}"
 echo "DISABLE_RADIX_CACHE=${DISABLE_RADIX_CACHE}"
 echo "CUDA_HOME=${CUDA_HOME}"
 echo "nvcc=$(which nvcc)"
+echo "singularity=$(which singularity)"
 echo "==================="
 
 nvcc --version
+singularity --version
 nvidia-smi || true
 
 if [[ "${SBENCH_PREWARM_MINI_SWE}" == "1" ]]; then
