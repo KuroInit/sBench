@@ -18,6 +18,7 @@ if [[ ! -f "${JOB_ENV_FILE}" ]]; then
 fi
 cd "${JOB_REPO_DIR}"
 
+
 echo "=== Job Info ==="
 echo "PWD: $(pwd)"
 echo "JOB_REPO_DIR: ${JOB_REPO_DIR}"
