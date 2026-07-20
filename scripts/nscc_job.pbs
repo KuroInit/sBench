@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N sbench_sweep
-#PBS -l select=1:ncpus=64:ngpus=4:mem=440gb
+#PBS -l select=1:ncpus=32:ngpus=1:mem=110gb
 #PBS -l walltime=06:00:00
 #PBS -j oe
 #PBS -o /home/users/ntu/ashwin01/scratch/fyp/sbench_sweep.log
