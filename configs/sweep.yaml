@@ -29,33 +29,14 @@ models:
       hidden_size: 2048
       intermediate_size: 5632
       moe_intermediate_size: 1408
+      shared_expert_intermediate_size: 5632
       num_attention_heads: 16
       num_key_value_heads: 16
       head_dim: 128
       num_experts: 60
       num_experts_per_tok: 4
 
-  - id: Qwen/Qwen3-30B-A3B
-    slug: qwen3_30b
-    served_model_name: qwen3_30b
-    dtype: bfloat16
-    context_length: 40960
-    tp: 4
-    mem_fraction_static: 0.80
-    chunked_prefill_size: 16384
-    max_prefill_tokens: 16384
-    hf_config:
-      model_type: qwen3_moe
-      num_hidden_layers: 48
-      hidden_size: 2048
-      intermediate_size: 6144
-      moe_intermediate_size: 768
-      num_attention_heads: 32
-      num_key_value_heads: 4
-      head_dim: 128
-      decoder_sparse_step: 1
-      num_experts: 128
-      num_experts_per_tok: 8
+  # Qwen3-30B-A3B disabled while calibrating sBench against MoE-CAP with Qwen1.5 only.
 
   # Qwen3-Next-80B-A3B-Instruct was used as a larger reference before, but it
   # usually needs tp=8. Keep it disabled for this NSCC profile because max tp=4.

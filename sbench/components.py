@@ -46,7 +46,7 @@ def prefill_context_mass(record: dict) -> int:
     total = 0
     for req in per_req:
         extend_len = int(req.get("extend_len", 0) or 0)
-        seq_len = int(req.get("seq_len", 0) or 0)
+        seq_len = int(req.get("seq_len") or req.get("total_len") or 0)
         if extend_len > 0 and seq_len > 0:
             total += extend_len * seq_len
     if total:
@@ -168,8 +168,9 @@ class RouterComponent:
         moe = arch.moe
         if not moe.enabled or not moe.routed_experts:
             return ComponentCost(name=self.name)
-        tokens = processed_tokens(record) if record.get("forward_mode") == "prefill" else int(record.get("batch_size", 1))
-        units = moe.moe_layers * tokens * moe.hidden_size * moe.routed_experts / 1e12
+        # Return per-token router work. The estimator multiplies FLOP units by
+        # tokens/sec, so including token count here double-counts throughput.
+        units = moe.moe_layers * moe.hidden_size * moe.routed_experts / 1e12
         return ComponentCost(name=self.name, flops_units=units)
 
 

@@ -108,7 +108,7 @@ def _smbu(arch: ArchitectureDescriptor, cost: ComponentCost, latency: float) -> 
 
 def _smfu(arch: ArchitectureDescriptor, cost: ComponentCost, throughput: float) -> float:
     rt = arch.runtime
-    return ((cost.flops_units + cost.attention_score_units) * 2 * throughput) / (rt.num_gpus * rt.peak_flops_tf)
+    return ((cost.flops_units + cost.attention_score_units) * 2 * throughput) / (rt.num_gpus * rt.peak_flops_tf / 2)
 
 
 def _weighted(values: list[tuple[float, float]]) -> float:

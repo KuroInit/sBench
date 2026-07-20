@@ -1,5 +1,5 @@
 from sbench.adapters import resolve_adapter
-from sbench.components import AttentionComponent, CacheComponent, MoEComponent
+from sbench.components import AttentionComponent, CacheComponent, MoEComponent, RouterComponent, prefill_context_mass
 from sbench.descriptor import ArchitectureDescriptor, AttentionDescriptor, CacheDescriptor, FFNDescriptor, MoEDescriptor, RuntimeDescriptor, descriptor_from_config
 from sbench.estimator import estimate_records
 
@@ -77,6 +77,25 @@ def test_moe_bandwidth_uses_activation_but_flops_do_not():
     assert cost.bandwidth_units == 2 * (3 * expert + expert)
     assert cost.flops_units == 2 * (expert + expert)
 
+
+
+def test_prefill_context_mass_uses_probe_total_len():
+    record = {
+        "forward_mode": "prefill",
+        "seq_lens_sum": 300,
+        "processed_tokens": 30,
+        "per_req_info": [
+            {"extend_len": 10, "total_len": 100},
+            {"extend_len": 20, "total_len": 200},
+        ],
+    }
+    assert prefill_context_mass(record) == 10 * 100 + 20 * 200
+
+
+def test_router_component_returns_per_token_units():
+    desc = ArchitectureDescriptor(moe=MoEDescriptor(enabled=True, moe_layers=2, hidden_size=10, routed_experts=4))
+    cost = RouterComponent().estimate(desc, {"forward_mode": "prefill", "processed_tokens": 100, "batch_size": 10})
+    assert cost.flops_units == 2 * 10 * 4 / 1e12
 
 def test_estimator_preserves_packed_prefill_throughput_and_processed_tokens():
     desc = ArchitectureDescriptor(
