@@ -83,8 +83,6 @@ def usable_records(records: Iterable[dict]) -> list[dict]:
     out = []
     for source in records:
         record = dict(source)
-        if record.get("expert_activation") is None:
-            record["expert_activation"] = 0
         if record.get("forward_mode") == "prefill" and int(record.get("seq_lens_sum", 0)) <= 10:
             continue
         latency = float(record.get("latency", 0) or 0)

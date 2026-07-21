@@ -2,6 +2,7 @@ from sbench.adapters import resolve_adapter
 from sbench.components import AttentionComponent, CacheComponent, MoEComponent, RouterComponent, prefill_context_mass
 from sbench.descriptor import ArchitectureDescriptor, AttentionDescriptor, CacheDescriptor, FFNDescriptor, MoEDescriptor, RuntimeDescriptor, descriptor_from_config
 from sbench.estimator import estimate_records
+import pytest
 from sbench.moe_cap_estimator import estimate_moe_cap_compatible
 
 
@@ -104,7 +105,7 @@ def test_estimator_preserves_packed_prefill_throughput_and_processed_tokens():
         cache=CacheDescriptor(type="kv", num_layers=1, head_dim=1, num_key_value_heads=1),
         runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
     )
-    result = estimate_records(desc, [{"forward_mode": "prefill", "latency": 2.0, "seq_lens_sum": 400, "batch_size": 4, "processed_tokens": 100, "expert_activation": 0}])
+    result = estimate_records(desc, [{"forward_mode": "prefill", "latency": 2.0, "seq_lens_sum": 400, "batch_size": 4, "processed_tokens": 100}])
     assert result.prefill_tp == 200
     assert result.kv_size == 2e-4
 
@@ -116,18 +117,24 @@ def test_adapter_registry_selects_component_mix():
     assert result.name == "qwen_hybrid"
 
 
-def test_estimator_keeps_timing_only_negative_activation_records():
+def test_estimator_keeps_timing_only_records_for_dense_models():
     desc = ArchitectureDescriptor(
         attention=AttentionDescriptor(type="gqa", num_layers=1, hidden_size=8, num_attention_heads=1, num_key_value_heads=1, head_dim=8),
         cache=CacheDescriptor(type="kv", num_layers=1, head_dim=8, num_key_value_heads=1),
         runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
     )
-    result = estimate_records(desc, [{"forward_mode": "decode", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 4, "expert_activation": -1}])
+    result = estimate_records(desc, [{"forward_mode": "decode", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 4}])
     assert result.decoding_throughput == 4
     assert result.decoding_smfu > 0
 
 
-def test_moe_cap_compatible_qwen_uses_topk_when_activation_missing():
+def test_component_wise_moe_requires_real_activation():
+    desc = ArchitectureDescriptor(moe=MoEDescriptor(enabled=True, moe_layers=2, hidden_size=10, expert_intermediate_size=5, shared_experts=1))
+    with pytest.raises(ValueError, match="requires real expert_activation"):
+        MoEComponent().estimate(desc, {"forward_mode": "prefill", "processed_tokens": 100})
+
+
+def test_moe_cap_compatible_qwen_requires_real_activation():
     desc = ArchitectureDescriptor(
         model_name="Qwen/Qwen1.5-MoE-A2.7B-Chat",
         model_type="qwen2_moe",
@@ -136,7 +143,8 @@ def test_moe_cap_compatible_qwen_uses_topk_when_activation_missing():
         moe=MoEDescriptor(enabled=True, moe_layers=2, routed_experts=8, top_k=2, hidden_size=16, expert_intermediate_size=4, shared_expert_intermediate_size=4),
         runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=100),
     )
-    missing = estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100}])
-    explicit = estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100, "expert_activation": 2}])
-    assert missing.prefill_smbu == explicit.prefill_smbu
-    assert missing.prefill_smfu == explicit.prefill_smfu
+    with pytest.raises(ValueError, match="requires real expert_activation"):
+        estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100}])
+    explicit = estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100, "expert_activation": 2, "raw_probe_source": "expert_distribution_metrics"}])
+    assert explicit.prefill_smbu > 0
+    assert explicit.prefill_smfu > 0

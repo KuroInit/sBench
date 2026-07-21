@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .components import AttentionComponent, CacheComponent, processed_tokens
+from .components import AttentionComponent, CacheComponent, processed_tokens, real_expert_activation
 from .descriptor import ArchitectureDescriptor
 from .estimator import EstimateResult, usable_records
 
@@ -50,7 +50,7 @@ def estimate_moe_cap_compatible(arch: ArchitectureDescriptor, records: Iterable[
         latency = float(record.get("latency", 0) or 0)
         mode = record.get("forward_mode")
         kv_size = _kv_size(arch, record)
-        attention_score = AttentionComponent().attention_score_units(arch, record)
+        attention_score = _attention_score(arch, record)
         activation = _activation(arch, record)
         kv_sizes.append(_true_kv_size_mb(arch, record))
 
@@ -106,10 +106,25 @@ def _qwen_constants(arch: ArchitectureDescriptor) -> dict[str, float]:
 
 
 def _activation(arch: ArchitectureDescriptor, record: dict) -> float:
-    value = record.get("expert_activation")
-    if value is None or float(value or 0) <= 0:
-        return float(arch.moe.top_k or 0)
-    return max(float(value), 0.0)
+    return real_expert_activation(record)
+
+
+def _attention_score(arch: ArchitectureDescriptor, record: dict) -> float:
+    attn = arch.attention
+    ctx = int(record.get("seq_lens_sum", 0) or 0)
+    if attn.type == "mla" and attn.qk_rope_head_dim is not None:
+        q_head_dim = attn.qk_rope_head_dim + (attn.qk_nope_head_dim or 0)
+        k_size = attn.num_layers * attn.num_attention_heads * q_head_dim
+        v_size = attn.num_layers * attn.num_attention_heads * (attn.v_head_dim or attn.head_dim)
+        score = ctx * k_size + ctx * v_size
+    else:
+        kv_size = attn.num_layers * attn.num_attention_heads * attn.head_dim
+        score = ctx * kv_size * 2
+    if record.get("forward_mode") == "prefill":
+        score /= max(ctx, 1)
+    else:
+        score /= max(int(record.get("batch_size", 1) or 1), 1)
+    return score / 1e12
 
 
 def _kv_size(arch: ArchitectureDescriptor, record: dict) -> float:

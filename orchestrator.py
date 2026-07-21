@@ -38,6 +38,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
     plan = sweep_plan(config)
     total = len(plan)
     done = 0
+    estimator_mode = _estimator_mode(config)
     for dataset, model, bs in plan:
         done += 1
         slug = model["slug"]
@@ -58,7 +59,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
         existing_pythonpath = env.get("PYTHONPATH")
         env["PYTHONPATH"] = str(PROJECT_ROOT) if not existing_pythonpath else f"{PROJECT_ROOT}:{existing_pythonpath}"
         env["SBENCH_GPU_TYPE"] = env.get("ANALYZE_GPU_TYPE", env.get("SBENCH_GPU_TYPE", "unknown"))
-        proc = start_sglang(model, int(bs), port, env)
+        proc = start_sglang(model, int(bs), port, env, estimator_mode=estimator_mode)
         try:
             if not wait_health(port, proc):
                 error = f"SGLang failed to start, code={proc.poll()}"
@@ -121,7 +122,7 @@ def sweep_plan(config: dict[str, Any]) -> list[tuple[str, dict[str, Any], int]]:
     ]
 
 
-def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[str, str]) -> subprocess.Popen:
+def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[str, str], *, estimator_mode: str = "component-wise") -> subprocess.Popen:
     cmd = [
         sys.executable,
         "-m",
@@ -144,6 +145,8 @@ def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[st
         cmd += ["--served-model-name", str(model["served_model_name"])]
     if model.get("dtype"):
         cmd += ["--dtype", str(model["dtype"])]
+    if estimator_mode == "moe-cap" and _model_looks_moe(model):
+        cmd += ["--enable-return-routed-experts", "--enable-expert-distribution-metrics"]
     if model.get("chat_template"):
         cmd += ["--chat-template", str(model["chat_template"])]
     return subprocess.Popen(cmd, env=env)
@@ -227,6 +230,23 @@ def active_dataset_lanes(config: dict[str, Any]) -> dict[str, str]:
     return lanes
 
 
+
+def _estimator_mode(config: dict[str, Any]) -> str:
+    mode = str(config.get("estimator_mode") or config.get("estimator") or "component-wise").strip().lower()
+    aliases = {"component": "component-wise", "component_wise": "component-wise", "components": "component-wise", "moecap": "moe-cap", "moe_cap": "moe-cap"}
+    mode = aliases.get(mode, mode)
+    if mode not in {"component-wise", "moe-cap"}:
+        raise SystemExit(f"unsupported estimator_mode={mode!r}; expected component-wise or moe-cap")
+    return mode
+
+
+def _model_looks_moe(model: dict[str, Any]) -> bool:
+    cfg = model.get("hf_config") or model.get("architecture") or {}
+    if isinstance(cfg, dict) and cfg.get("moe_intermediate_size"):
+        return True
+    model_id = str(model.get("id") or "").lower()
+    return "moe" in model_id or "a3b" in model_id or "a22b" in model_id
+
 def validate_request_results(results: list[Any], cfg: dict[str, Any]) -> tuple[bool, str]:
     if not results:
         return False, "dataset produced no requests"
@@ -273,6 +293,7 @@ def run_signature(model: dict[str, Any], batch_size: int, dataset: str, dataset_
         "dataset_cfg": dataset_cfg,
         "hf_config": model.get("hf_config") or model.get("architecture"),
         "probe_schema": 1,
+        "estimator_mode": _estimator_mode(load_yaml(SWEEP_CONFIG)),
     }
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]

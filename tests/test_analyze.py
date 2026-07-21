@@ -88,7 +88,7 @@ def test_analyze_honors_moe_cap_estimator_mode(tmp_path):
         "architecture_overrides": {},
     }
     (leaf / "metadata_batched_prefill_1.json").write_text(json.dumps(meta))
-    (leaf / "server_records_batched_prefill_1.jsonl").write_text(json.dumps({"forward_pass_id": 1, "forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100}) + "\n")
+    (leaf / "server_records_batched_prefill_1.jsonl").write_text(json.dumps({"forward_pass_id": 1, "forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100, "expert_activation": 2, "raw_probe_source": "expert_distribution_metrics"}) + "\n")
     env = os.environ.copy()
     env.pop("ANALYZE_GPU_TYPE", None)
     env["SWEEP_CONFIG"] = str(sweep)

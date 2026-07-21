@@ -41,6 +41,18 @@ def processed_tokens(record: dict) -> int:
     return total or int(record.get("seq_lens_sum", 0))
 
 
+def real_expert_activation(record: dict) -> float:
+    value = record.get("expert_activation")
+    source = record.get("raw_probe_source", "unknown")
+    if value is None or float(value or 0) <= 0:
+        raise ValueError(
+            "MoE estimator requires real expert_activation from the probe; "
+            f"got expert_activation={value!r}, raw_probe_source={source!r}. "
+            "Run SGLang with routed expert capture enabled."
+        )
+    return max(float(value), 0.0)
+
+
 def prefill_context_mass(record: dict) -> int:
     per_req = record.get("per_req_info") or []
     total = 0
@@ -153,7 +165,7 @@ class MoEComponent:
             shared = moe.shared_expert_intermediate_size * 3 * moe.hidden_size / 1e12
         else:
             shared = moe.shared_experts * expert_size
-        activation = max(float(record.get("expert_activation", 0) or 0), 0.0)
+        activation = real_expert_activation(record)
         return ComponentCost(
             name=self.name,
             bandwidth_units=moe.moe_layers * (activation * expert_size + shared),
