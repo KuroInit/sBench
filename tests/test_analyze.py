@@ -62,3 +62,36 @@ def test_analyze_reports_unknown_gpu_as_failed_row(tmp_path):
     subprocess.check_call([sys.executable, str(Path(__file__).parents[1] / "analyze.py"), str(tmp_path)], env=env)
     raw = (tmp_path / "raw_values.csv").read_text()
     assert "unknown GPU type" in raw
+
+
+def test_analyze_honors_moe_cap_estimator_mode(tmp_path):
+    leaf = tmp_path / "qwen" / "bs2" / "batched_prefill" / "Qwen" / "Model"
+    leaf.mkdir(parents=True)
+    sweep = tmp_path / "sweep.yaml"
+    sweep.write_text("estimator_mode: moe-cap\n")
+    meta = {
+        "model_config": {"model_name": "Qwen/Test-MoE", "precision": "bfloat16"},
+        "hardware": {"num_gpus": 1, "gpu_type": "NVIDIA-A100-SXM4-40GB"},
+        "hf_config": {
+            "model_type": "qwen2_moe",
+            "num_hidden_layers": 2,
+            "hidden_size": 16,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 2,
+            "head_dim": 8,
+            "intermediate_size": 32,
+            "moe_intermediate_size": 4,
+            "shared_expert_intermediate_size": 4,
+            "num_experts": 8,
+            "num_experts_per_tok": 2,
+        },
+        "architecture_overrides": {},
+    }
+    (leaf / "metadata_batched_prefill_1.json").write_text(json.dumps(meta))
+    (leaf / "server_records_batched_prefill_1.jsonl").write_text(json.dumps({"forward_pass_id": 1, "forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100}) + "\n")
+    env = os.environ.copy()
+    env.pop("ANALYZE_GPU_TYPE", None)
+    env["SWEEP_CONFIG"] = str(sweep)
+    subprocess.check_call([sys.executable, str(Path(__file__).parents[1] / "analyze.py"), str(tmp_path)], env=env)
+    raw = (tmp_path / "raw_values.csv").read_text()
+    assert "moe-cap" in raw

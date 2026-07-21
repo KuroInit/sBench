@@ -12,6 +12,7 @@ from typing import Any
 
 from sbench.adapters import resolve_adapter
 from sbench.estimator import estimate_component_breakdown, estimate_records, usable_records
+from sbench.moe_cap_estimator import estimate_moe_cap_compatible
 from sbench.hardware import peak_bandwidth_tb, peak_flops_tf
 
 
@@ -20,6 +21,8 @@ def main() -> None:
         print("Usage: python analyze.py <RESULTS_DIR>", file=sys.stderr)
         raise SystemExit(1)
     results_dir = Path(sys.argv[1])
+    sweep_config = _load_sweep_config()
+    estimator_mode = _estimator_mode(sweep_config)
     rows = []
     breakdown_rows = []
     for leaf in _leaf_dirs(results_dir):
@@ -63,7 +66,12 @@ def main() -> None:
                 peak_bandwidth_tb=peak_bandwidth_tb(gpu),
                 peak_flops_tf=peak_flops_tf(gpu, precision),
             )
-            result = estimate_records(adapter.descriptor, filtered_records, components=adapter.components)
+            if estimator_mode == "moe-cap":
+                result = estimate_moe_cap_compatible(adapter.descriptor, filtered_records)
+                estimator_used = "moe-cap"
+            else:
+                result = estimate_records(adapter.descriptor, filtered_records, components=adapter.components)
+                estimator_used = "component-wise"
         except Exception as exc:
             rows.append(_synthetic_failure_row(leaf, results_dir, str(exc)))
             continue
@@ -72,6 +80,7 @@ def main() -> None:
             "slug": slug,
             "batch_size": bs,
             "adapter": adapter.name,
+            "estimator": estimator_used,
             "prefill_tokens_per_sec": result.prefill_tp,
             "decoding_tokens_per_sec": result.decoding_throughput,
             "prefill_smfu": result.prefill_smfu * 100,
@@ -91,6 +100,26 @@ def main() -> None:
     _write_plots(results_dir, rows)
     print(f"wrote {results_dir / 'raw_values.csv'}")
 
+
+
+def _load_sweep_config() -> dict[str, Any]:
+    path = Path(os.environ.get("SWEEP_CONFIG", Path(__file__).resolve().parent / "configs" / "sweep.yaml"))
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+        return yaml.safe_load(path.read_text()) or {}
+    except Exception:
+        return {}
+
+
+def _estimator_mode(config: dict[str, Any]) -> str:
+    mode = str(config.get("estimator_mode") or config.get("estimator") or "component-wise").strip().lower()
+    aliases = {"component": "component-wise", "component_wise": "component-wise", "components": "component-wise", "moecap": "moe-cap", "moe_cap": "moe-cap"}
+    mode = aliases.get(mode, mode)
+    if mode not in {"component-wise", "moe-cap"}:
+        raise SystemExit(f"unsupported estimator_mode={mode!r}; expected component-wise or moe-cap")
+    return mode
 
 def _leaf_dirs(root: Path):
     if not root.exists():

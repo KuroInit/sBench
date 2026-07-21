@@ -2,6 +2,7 @@ from sbench.adapters import resolve_adapter
 from sbench.components import AttentionComponent, CacheComponent, MoEComponent, RouterComponent, prefill_context_mass
 from sbench.descriptor import ArchitectureDescriptor, AttentionDescriptor, CacheDescriptor, FFNDescriptor, MoEDescriptor, RuntimeDescriptor, descriptor_from_config
 from sbench.estimator import estimate_records
+from sbench.moe_cap_estimator import estimate_moe_cap_compatible
 
 
 def test_qwen3_descriptor_counts_moe_layers():
@@ -124,3 +125,18 @@ def test_estimator_keeps_timing_only_negative_activation_records():
     result = estimate_records(desc, [{"forward_mode": "decode", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 4, "expert_activation": -1}])
     assert result.decoding_throughput == 4
     assert result.decoding_smfu > 0
+
+
+def test_moe_cap_compatible_qwen_uses_topk_when_activation_missing():
+    desc = ArchitectureDescriptor(
+        model_name="Qwen/Qwen1.5-MoE-A2.7B-Chat",
+        model_type="qwen2_moe",
+        attention=AttentionDescriptor(type="mha", num_layers=2, hidden_size=16, num_attention_heads=2, num_key_value_heads=2, head_dim=8),
+        cache=CacheDescriptor(type="kv", num_layers=2, head_dim=8, num_key_value_heads=2),
+        moe=MoEDescriptor(enabled=True, moe_layers=2, routed_experts=8, top_k=2, hidden_size=16, expert_intermediate_size=4, shared_expert_intermediate_size=4),
+        runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=100),
+    )
+    missing = estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100}])
+    explicit = estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100, "expert_activation": 2}])
+    assert missing.prefill_smbu == explicit.prefill_smbu
+    assert missing.prefill_smfu == explicit.prefill_smfu

@@ -5,10 +5,14 @@
 batch_sizes: [2, 4, 8, 16, 32, 64, 128]
 benchmark_types:
   prefill: [batched_prefill]
-  chat: [sharegpt, azure_chat]
+  chat: [sharegpt]
   reasoning: [mmlu_pro]
   agentic: [mini_swe_agent]
 port: 30000
+
+# component-wise keeps the new architecture-component estimator.
+# moe-cap uses MoE-CAP-compatible formulas for supported models such as Qwen MoE.
+estimator_mode: moe-cap
 
 # Add or remove models here. The harness runs every selected model against
 # every selected dataset at every selected batch size.
