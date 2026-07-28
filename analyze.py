@@ -46,7 +46,11 @@ def main() -> None:
             if failure:
                 rows.append(_failure_row(failure))
             continue
+        dataset, slug, bs = _parts(results_dir, leaf)
         filtered_records = usable_records(records)
+        sample_limit = _metric_sample_limit(meta, dataset)
+        if sample_limit is not None:
+            filtered_records = filtered_records[:sample_limit]
         if not filtered_records:
             rows.append(_synthetic_failure_row(leaf, results_dir, "no usable probe records"))
             continue
@@ -55,7 +59,6 @@ def main() -> None:
         gpu = os.environ.get("ANALYZE_GPU_TYPE") or meta.get("hardware", {}).get("gpu_type") or records[0].get("gpu_raw_type")
         overrides = {"architecture": meta.get("architecture_overrides", {})}
         cfg = meta.get("hf_config", {})
-        dataset, slug, bs = _parts(results_dir, leaf)
         try:
             adapter = resolve_adapter(
                 cfg,
@@ -90,6 +93,7 @@ def main() -> None:
             "ttft": result.ttft,
             "tpot": result.tpot,
             "kv_size": result.kv_size,
+            "metric_sample_records": len(filtered_records),
             "run_status": "success",
         })
         for record in filtered_records:
@@ -126,6 +130,18 @@ def _leaf_dirs(root: Path):
         return []
     return [p for p in root.rglob("*") if p.is_dir() and (_latest(p, "metadata_*.json") or _latest(p, "failure_*.json"))]
 
+
+
+
+def _metric_sample_limit(meta: dict[str, Any], dataset: str) -> int | None:
+    cfg = meta.get("dataset_config", {}) or {}
+    if cfg.get("runner") != "mini_swe_agent" and dataset != "mini_swe_agent":
+        return None
+    value = cfg.get("metric_sample_steps", cfg.get("num_samples"))
+    if value is None:
+        return None
+    limit = int(value)
+    return limit if limit > 0 else None
 
 def _latest(path: Path, pattern: str) -> Path | None:
     matches = sorted(path.glob(pattern))

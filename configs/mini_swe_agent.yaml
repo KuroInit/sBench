@@ -7,10 +7,13 @@ split: dev
 environment_class: singularity
 precision: bfloat16
 target_output_tokens: 0
+# For mini-SWE, num_samples controls metric sampling steps from probe records,
+# while --slice controls how many SWE-Bench issues/containers are launched.
 num_samples: 200
+metric_sample_steps: 200
 require_output_artifacts: true
 timeout_seconds: 14400
-extra_args: ["--slice", "0:200", "--redo-existing"]
+extra_args: ["--slice", "0:8", "--redo-existing"]
 
 # Optional:
 # binary: mini-extra

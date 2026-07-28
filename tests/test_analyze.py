@@ -95,3 +95,19 @@ def test_analyze_honors_moe_cap_estimator_mode(tmp_path):
     subprocess.check_call([sys.executable, str(Path(__file__).parents[1] / "analyze.py"), str(tmp_path)], env=env)
     raw = (tmp_path / "raw_values.csv").read_text()
     assert "moe-cap" in raw
+
+
+def test_mini_swe_metric_sample_limit_uses_step_count():
+    import analyze
+
+    meta = {"dataset_config": {"runner": "mini_swe_agent", "num_samples": 200}}
+    assert analyze._metric_sample_limit(meta, "mini_swe_agent") == 200
+    assert analyze._metric_sample_limit(meta, "mmlu_pro") == 200
+    assert analyze._metric_sample_limit({"dataset_config": {"num_samples": 200}}, "mmlu_pro") is None
+
+
+def test_mini_swe_metric_sample_steps_overrides_num_samples():
+    import analyze
+
+    meta = {"dataset_config": {"runner": "mini_swe_agent", "num_samples": 200, "metric_sample_steps": 64}}
+    assert analyze._metric_sample_limit(meta, "mini_swe_agent") == 64
