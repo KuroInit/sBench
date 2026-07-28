@@ -7,9 +7,10 @@ split: dev
 environment_class: singularity
 precision: bfloat16
 target_output_tokens: 0
+num_samples: 200
 require_output_artifacts: true
 timeout_seconds: 14400
-extra_args: ["--slice", "0:8", "--redo-existing"]
+extra_args: ["--slice", "0:200", "--redo-existing"]
 
 # Optional:
 # binary: mini-extra
