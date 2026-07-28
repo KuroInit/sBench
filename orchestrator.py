@@ -59,6 +59,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
         existing_pythonpath = env.get("PYTHONPATH")
         env["PYTHONPATH"] = str(PROJECT_ROOT) if not existing_pythonpath else f"{PROJECT_ROOT}:{existing_pythonpath}"
         env["SBENCH_GPU_TYPE"] = env.get("ANALYZE_GPU_TYPE", env.get("SBENCH_GPU_TYPE", "unknown"))
+        set_probe_model_env(env, model)
         proc = start_sglang(model, int(bs), port, env, estimator_mode=estimator_mode)
         try:
             if not wait_health(port, proc):
@@ -120,6 +121,30 @@ def sweep_plan(config: dict[str, Any]) -> list[tuple[str, dict[str, Any], int]]:
         for model in config.get("models", [])
         for batch_size in config.get("batch_sizes", [])
     ]
+
+
+def set_probe_model_env(env: dict[str, str], model: dict[str, Any]) -> None:
+    cfg = model.get("hf_config") or model.get("architecture") or {}
+    num_experts = first_int(cfg, "num_experts", "num_experts_per_layer", "n_routed_experts", "n_experts")
+    top_k = first_int(cfg, "num_experts_per_tok", "moe_top_k", "topk", "router_topk")
+    if num_experts is not None:
+        env["SBENCH_NUM_EXPERTS"] = str(num_experts)
+    if top_k is not None:
+        env["SBENCH_TOP_K"] = str(top_k)
+
+
+def first_int(cfg: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = cfg.get(key) if isinstance(cfg, dict) else None
+        if value is None:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
 
 
 def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[str, str], *, estimator_mode: str = "component-wise") -> subprocess.Popen:

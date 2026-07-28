@@ -64,3 +64,21 @@ def test_probe_extracts_activation_from_indexer_topk_output():
     record = build_probe_record(runner, batch, output, 0.2)
     assert record.raw_probe_source == "indexer_topk_output"
     assert record.expert_activation == 2
+
+
+def test_probe_scales_fractional_expert_distribution_metric():
+    runner = SimpleNamespace(forward_pass_id=11, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=80)
+    metrics = SimpleNamespace(expert_activation=0.05, expert_utilization=0.05, num_experts=60)
+    record = build_probe_record(runner, batch, SimpleNamespace(expert_distribution_metrics=metrics), 0.2)
+    assert record.raw_probe_source == "expert_distribution_metrics_scaled"
+    assert record.expert_activation == 3.0
+
+
+def test_probe_uses_utilization_when_activation_count_missing():
+    runner = SimpleNamespace(forward_pass_id=12, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=80)
+    metrics = SimpleNamespace(expert_utilization=0.4, num_experts=60)
+    record = build_probe_record(runner, batch, SimpleNamespace(expert_distribution_metrics=metrics), 0.2)
+    assert record.raw_probe_source == "expert_distribution_utilization_scaled"
+    assert record.expert_activation == 24.0

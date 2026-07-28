@@ -150,10 +150,25 @@ def _extract_expert_activation(output: Any, *, profiling_only: bool) -> tuple[fl
         return 0.0, None, "profiling_only"
     metrics = getattr(output, "expert_distribution_metrics", None)
     if metrics is not None:
-        activation = _field(metrics, "average_expert_activation", "avg_expert_activation", "expert_activation")
+        activation = _field(
+            metrics,
+            "avg_activated_per_layer",
+            "average_activated_per_layer",
+            "average_activated_experts_per_layer",
+            "average_expert_activation",
+            "avg_expert_activation",
+            "expert_activation",
+        )
         utilization = _field(metrics, "expert_utilization", "average_expert_utilization")
-        if activation is not None:
-            return float(activation), float(utilization) if utilization is not None else None, "expert_distribution_metrics"
+        num_experts = _num_experts_from(metrics)
+        normalized = _normalize_activation_metric(activation, utilization, num_experts)
+        if normalized is not None:
+            source = "expert_distribution_metrics"
+            if activation is not None and num_experts and 0 < float(activation) <= 1.0:
+                source = "expert_distribution_metrics_scaled"
+            elif activation is None and utilization is not None:
+                source = "expert_distribution_utilization_scaled"
+            return normalized, float(utilization) if utilization is not None else None, source
     routed = getattr(output, "routed_experts_output", None)
     activation = _activation_from_routed_output(routed)
     if activation is not None:
@@ -180,9 +195,8 @@ def _activation_from_routed_output(value: Any) -> float | None:
         tensor = counts if isinstance(counts, torch.Tensor) else torch.as_tensor(counts)
         if tensor.numel() == 0:
             return None
-        if tensor.ndim >= 2 and is_topk:
-            valid = tensor[tensor >= 0]
-            active = valid.unique().numel() if valid.numel() else 0
+        if is_topk:
+            active = _activation_from_topk_tensor(tensor)
         elif tensor.ndim >= 2:
             active = (tensor > 0).float().sum(dim=-1).float().mean()
         else:
@@ -198,6 +212,40 @@ def _activation_from_routed_output(value: Any) -> float | None:
         return None
 
 
+def _activation_from_topk_tensor(tensor: Any) -> Any:
+    valid = tensor[tensor >= 0]
+    if valid.numel() == 0:
+        return 0
+    if tensor.ndim >= 3:
+        per_layer = []
+        for layer in tensor:
+            layer_valid = layer[layer >= 0]
+            per_layer.append(layer_valid.unique().numel() if layer_valid.numel() else 0)
+        import torch
+        return torch.as_tensor(per_layer, dtype=torch.float32).mean()
+    return valid.unique().numel()
+
+
+def _normalize_activation_metric(activation: Any, utilization: Any, num_experts: int | None) -> float | None:
+    if activation is None:
+        if utilization is not None and num_experts:
+            return float(utilization) * num_experts
+        return None
+    value = float(activation)
+    if num_experts and 0 < value <= 1.0:
+        return value * num_experts
+    return value
+
+
+def _num_experts_from(value: Any) -> int | None:
+    raw = _field(value, "num_experts", "num_physical_experts", "num_logical_experts", "routed_experts", "n_routed_experts")
+    if raw is None:
+        raw = os.environ.get("SBENCH_NUM_EXPERTS")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _flatten(value: Any) -> list[Any]:
