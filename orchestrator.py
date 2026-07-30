@@ -171,7 +171,12 @@ def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[st
     if model.get("dtype"):
         cmd += ["--dtype", str(model["dtype"])]
     if estimator_mode == "moe-cap" and _model_looks_moe(model):
-        cmd += ["--enable-return-routed-experts", "--enable-expert-distribution-metrics"]
+        cmd += [
+            "--expert-distribution-recorder-mode",
+            "stat",
+            "--enable-return-routed-experts",
+            "--enable-expert-distribution-metrics",
+        ]
     if model.get("chat_template"):
         cmd += ["--chat-template", str(model["chat_template"])]
     return subprocess.Popen(cmd, env=env)

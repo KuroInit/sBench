@@ -82,3 +82,15 @@ def test_probe_uses_utilization_when_activation_count_missing():
     record = build_probe_record(runner, batch, SimpleNamespace(expert_distribution_metrics=metrics), 0.2)
     assert record.raw_probe_source == "expert_distribution_utilization_scaled"
     assert record.expert_activation == 24.0
+
+
+def test_probe_ignores_empty_stat_recorder_buffer_slots():
+    import torch
+
+    runner = SimpleNamespace(forward_pass_id=13, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=1, seq_lens_sum=8)
+    logical_count = torch.zeros((1000, 24, 60), dtype=torch.int32)
+    logical_count[0, :, :4] = 1
+    output = SimpleNamespace(routed_experts_output={"logical_count": logical_count})
+    record = build_probe_record(runner, batch, output, 0.2)
+    assert record.expert_activation == 4.0

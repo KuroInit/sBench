@@ -197,10 +197,8 @@ def _activation_from_routed_output(value: Any) -> float | None:
             return None
         if is_topk:
             active = _activation_from_topk_tensor(tensor)
-        elif tensor.ndim >= 2:
-            active = (tensor > 0).float().sum(dim=-1).float().mean()
         else:
-            active = (tensor > 0).float().sum()
+            active = _activation_from_count_tensor(tensor)
         return float(active.item() if hasattr(active, "item") else active)
     except Exception:
         if is_topk:
@@ -210,6 +208,23 @@ def _activation_from_routed_output(value: Any) -> float | None:
         if rows:
             return sum(sum(1 for item in row if float(item) > 0) for row in rows) / len(rows)
         return None
+
+
+
+def _activation_from_count_tensor(tensor: Any) -> Any:
+    if tensor.ndim >= 3:
+        # SGLang stat recorder returns [buffer, layers, experts]. It may keep
+        # mostly-empty circular-buffer slots, so only average non-empty steps.
+        steps = tensor.reshape(-1, tensor.shape[-2], tensor.shape[-1])
+        nonempty = steps.sum(dim=(1, 2)) > 0
+        if nonempty.any():
+            steps = steps[nonempty]
+        else:
+            return 0
+        return (steps > 0).float().sum(dim=-1).mean()
+    if tensor.ndim >= 2:
+        return (tensor > 0).float().sum(dim=-1).float().mean()
+    return (tensor > 0).float().sum()
 
 
 def _activation_from_topk_tensor(tensor: Any) -> Any:
