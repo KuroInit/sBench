@@ -37,6 +37,11 @@ def main() -> None:
                 rows.append(_failure_row(failure))
             continue
         meta = json.loads(meta_path.read_text())
+        if "dataset_config" not in meta:
+            dataset_for_cfg = _parts(results_dir, leaf)[0]
+            recovered_cfg = _load_effective_dataset_config(leaf, dataset_for_cfg)
+            if recovered_cfg:
+                meta["dataset_config"] = recovered_cfg
         try:
             records = _read_jsonl(records_path)
         except Exception as exc:
@@ -131,6 +136,17 @@ def _leaf_dirs(root: Path):
     return [p for p in root.rglob("*") if p.is_dir() and (_latest(p, "metadata_*.json") or _latest(p, "failure_*.json"))]
 
 
+
+
+def _load_effective_dataset_config(leaf: Path, dataset: str) -> dict[str, Any]:
+    path = leaf.parent / f"effective_config_{dataset}.yaml"
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+        return yaml.safe_load(path.read_text()) or {}
+    except Exception:
+        return {}
 
 
 def _metric_sample_limit(meta: dict[str, Any], dataset: str) -> int | None:

@@ -148,3 +148,49 @@ def test_moe_cap_compatible_qwen_requires_real_activation():
     explicit = estimate_moe_cap_compatible(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100, "expert_activation": 2, "raw_probe_source": "expert_distribution_metrics"}])
     assert explicit.prefill_smbu > 0
     assert explicit.prefill_smfu > 0
+
+
+def test_moe_cap_qwen3_uses_dense_and_moe_layer_split():
+    qwen3 = descriptor_from_config(
+        {
+            "model_type": "qwen3_moe",
+            "num_hidden_layers": 4,
+            "hidden_size": 16,
+            "intermediate_size": 64,
+            "moe_intermediate_size": 8,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "head_dim": 8,
+            "num_experts": 8,
+            "num_experts_per_tok": 2,
+            "mlp_only_layers": [0],
+            "decoder_sparse_step": 2,
+        },
+        model_name="Qwen/Qwen3-30B-A3B",
+        precision_bytes=2,
+        num_gpus=1,
+        peak_bandwidth_tb=1,
+        peak_flops_tf=100,
+    )
+    qwen15_style = ArchitectureDescriptor(
+        model_name="Qwen/Qwen1.5-MoE-A2.7B-Chat",
+        model_type="qwen2_moe",
+        attention=qwen3.attention,
+        cache=qwen3.cache,
+        ffn=qwen3.ffn,
+        moe=MoEDescriptor(
+            enabled=True,
+            moe_layers=qwen3.attention.num_layers,
+            routed_experts=8,
+            top_k=2,
+            hidden_size=16,
+            expert_intermediate_size=8,
+            shared_expert_intermediate_size=64,
+        ),
+        runtime=qwen3.runtime,
+    )
+    record = {"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "processed_tokens": 100, "expert_activation": 4}
+    qwen3_result = estimate_moe_cap_compatible(qwen3, [record])
+    qwen15_result = estimate_moe_cap_compatible(qwen15_style, [record])
+    assert qwen3_result.prefill_smbu > 0
+    assert qwen3_result.prefill_smbu < qwen15_result.prefill_smbu

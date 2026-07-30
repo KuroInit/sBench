@@ -344,6 +344,7 @@ def write_metadata(leaf: Path, dataset: str, model: dict[str, Any], batch_size: 
         "system_environment": {"batch_size": batch_size},
         "architecture_overrides": cfg.get("architecture", {}),
         "hf_config": hf_config,
+        "dataset_config": cfg,
     }
     (leaf / f"metadata_{dataset}_{timestamp()}.json").write_text(json.dumps(payload, indent=2))
 

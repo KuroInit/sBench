@@ -21,9 +21,9 @@ def support_status(arch: ArchitectureDescriptor) -> MoeCapSupport:
     model_name = arch.model_name.lower()
     if not arch.moe.enabled:
         return MoeCapSupport(False, "MoE-CAP compatibility mode currently requires a MoE descriptor")
-    if "qwen" not in model_name and model_type not in {"qwen_moe", "qwen2_moe"}:
+    if "qwen" not in model_name and model_type not in {"qwen_moe", "qwen2_moe", "qwen3_moe"}:
         return MoeCapSupport(False, "MoE-CAP compatibility mode currently supports Qwen MoE models first")
-    if arch.moe.shared_expert_intermediate_size is None and arch.moe.shared_experts <= 0:
+    if not _is_qwen3(arch) and arch.moe.shared_expert_intermediate_size is None and arch.moe.shared_experts <= 0:
         return MoeCapSupport(False, "Qwen MoE-CAP formula requires shared expert size")
     return MoeCapSupport(True)
 
@@ -54,16 +54,30 @@ def estimate_moe_cap_compatible(arch: ArchitectureDescriptor, records: Iterable[
         activation = _activation(arch, record)
         kv_sizes.append(_true_kv_size_mb(arch, record))
 
-        bandwidth_units = constants["layers"] * (
-            activation * constants["expert_size"]
-            + constants["shared_experts_size_total"]
-            + constants["attention_size_per_token"]
-        ) + kv_size
-        flops_units = constants["layers"] * (
-            constants["attention_size_per_token"]
-            + constants["expert_size"]
-            + constants["shared_experts_size_total"]
-        ) + attention_score
+        if constants["is_qwen3"]:
+            bandwidth_units = (
+                constants["moe_layers"] * activation * constants["expert_size"]
+                + constants["dense_layers"] * constants["dense_ffn_size"]
+                + constants["layers"] * constants["attention_size_per_token"]
+                + kv_size
+            )
+            flops_units = (
+                constants["moe_layers"] * constants["expert_size"]
+                + constants["dense_layers"] * constants["dense_ffn_size"]
+                + constants["layers"] * constants["attention_size_per_token"]
+                + attention_score
+            )
+        else:
+            bandwidth_units = constants["layers"] * (
+                activation * constants["expert_size"]
+                + constants["shared_experts_size_total"]
+                + constants["attention_size_per_token"]
+            ) + kv_size
+            flops_units = constants["layers"] * (
+                constants["attention_size_per_token"]
+                + constants["expert_size"]
+                + constants["shared_experts_size_total"]
+            ) + attention_score
 
         if mode == "prefill":
             throughput = int(record.get("seq_lens_sum", 0)) / latency
@@ -93,16 +107,25 @@ def estimate_moe_cap_compatible(arch: ArchitectureDescriptor, records: Iterable[
 
 def _qwen_constants(arch: ArchitectureDescriptor) -> dict[str, float]:
     expert_size = arch.moe.expert_intermediate_size * 3 * arch.moe.hidden_size / 1e12
+    dense_ffn_size = arch.ffn.dense_intermediate_size * 3 * arch.ffn.hidden_size / 1e12
     if arch.moe.shared_expert_intermediate_size is not None:
         shared = arch.moe.shared_expert_intermediate_size * 3 * arch.moe.hidden_size / 1e12
     else:
         shared = arch.moe.shared_experts * expert_size
     return {
+        "is_qwen3": _is_qwen3(arch),
         "layers": float(arch.attention.num_layers),
+        "moe_layers": float(arch.moe.moe_layers),
+        "dense_layers": float(arch.ffn.dense_layers),
         "expert_size": expert_size,
+        "dense_ffn_size": dense_ffn_size,
         "shared_experts_size_total": shared,
         "attention_size_per_token": AttentionComponent().projection_units(arch),
     }
+
+
+def _is_qwen3(arch: ArchitectureDescriptor) -> bool:
+    return arch.model_type.lower() == "qwen3_moe" or "qwen3" in arch.model_name.lower()
 
 
 def _activation(arch: ArchitectureDescriptor, record: dict) -> float:
