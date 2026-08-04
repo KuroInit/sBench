@@ -58,6 +58,9 @@ class AttentionDescriptor:
     linear_num_key_heads: int | None = None
     linear_num_value_heads: int | None = None
     linear_conv_kernel_dim: int | None = None
+    layer_types: tuple[str, ...] = ()
+    full_attention_layers: int = 0
+    linear_attention_layers: int = 0
     sparse_factor: float = 1.0
 
 
@@ -70,6 +73,13 @@ class CacheDescriptor:
     kv_lora_rank: int | None = None
     qk_rope_head_dim: int | None = None
     recurrent_state_size: int | None = None
+    full_attention_layers: int = 0
+    linear_attention_layers: int = 0
+    linear_key_head_dim: int | None = None
+    linear_value_head_dim: int | None = None
+    linear_num_key_heads: int | None = None
+    linear_num_value_heads: int | None = None
+    linear_conv_kernel_dim: int | None = None
     sparse_factor: float = 1.0
 
 
@@ -124,30 +134,40 @@ def descriptor_from_config(
     """Build a descriptor from HF-style config plus optional architecture overrides."""
     arch_override = (overrides or {}).get("architecture") if overrides else None
     cfg = merge_dict(config, {k: v for k, v in (overrides or {}).items() if k != "architecture"})
+    text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), Mapping) else None
+    metric_cfg = merge_dict(cfg, text_cfg or {})
     model_l = model_name.lower()
 
-    layers = as_int(deep_get(cfg, "num_hidden_layers", "n_layers"))
-    hidden = as_int(deep_get(cfg, "hidden_size", "d_model"))
-    heads = as_int(deep_get(cfg, "num_attention_heads", "n_heads", "num_heads"))
-    kv_heads = as_int(deep_get(cfg, "num_key_value_heads", "num_kv_heads", "kv_n_heads"), heads)
-    head_dim = as_int(deep_get(cfg, "head_dim"), hidden // heads if hidden and heads else 0)
-    kv_lora_rank = _optional_int(deep_get(cfg, "kv_lora_rank"))
-    q_lora_rank = _optional_int(deep_get(cfg, "q_lora_rank"))
-    qk_rope = _optional_int(deep_get(cfg, "qk_rope_head_dim"))
-    qk_nope = _optional_int(deep_get(cfg, "qk_nope_head_dim"))
-    v_head_dim = _optional_int(deep_get(cfg, "v_head_dim"))
-    linear_key_head_dim = _optional_int(deep_get(cfg, "linear_key_head_dim"))
-    linear_value_head_dim = _optional_int(deep_get(cfg, "linear_value_head_dim"))
-    linear_num_key_heads = _optional_int(deep_get(cfg, "linear_num_key_heads"))
-    linear_num_value_heads = _optional_int(deep_get(cfg, "linear_num_value_heads"))
-    linear_conv_kernel_dim = _optional_int(deep_get(cfg, "linear_conv_kernel_dim"))
+    layers = as_int(deep_get(metric_cfg, "num_hidden_layers", "n_layers"))
+    hidden = as_int(deep_get(metric_cfg, "hidden_size", "d_model"))
+    heads = as_int(deep_get(metric_cfg, "num_attention_heads", "n_heads", "num_heads"))
+    kv_heads = as_int(deep_get(metric_cfg, "num_key_value_heads", "num_kv_heads", "kv_n_heads"), heads)
+    head_dim = as_int(deep_get(metric_cfg, "head_dim"), hidden // heads if hidden and heads else 0)
+    kv_lora_rank = _optional_int(deep_get(metric_cfg, "kv_lora_rank"))
+    q_lora_rank = _optional_int(deep_get(metric_cfg, "q_lora_rank"))
+    qk_rope = _optional_int(deep_get(metric_cfg, "qk_rope_head_dim"))
+    qk_nope = _optional_int(deep_get(metric_cfg, "qk_nope_head_dim"))
+    v_head_dim = _optional_int(deep_get(metric_cfg, "v_head_dim"))
+    linear_key_head_dim = _optional_int(deep_get(metric_cfg, "linear_key_head_dim"))
+    linear_value_head_dim = _optional_int(deep_get(metric_cfg, "linear_value_head_dim"))
+    linear_num_key_heads = _optional_int(deep_get(metric_cfg, "linear_num_key_heads"))
+    linear_num_value_heads = _optional_int(deep_get(metric_cfg, "linear_num_value_heads"))
+    linear_conv_kernel_dim = _optional_int(deep_get(metric_cfg, "linear_conv_kernel_dim"))
+    layer_types = tuple(str(item) for item in (deep_get(metric_cfg, "layer_types") or ()) if item)
+    full_attention_layers = sum(1 for item in layer_types if item == "full_attention")
+    linear_attention_layers = sum(1 for item in layer_types if item == "linear_attention")
+    if not layer_types:
+        full_interval = as_int(deep_get(metric_cfg, "full_attention_interval"))
+        if full_interval > 0:
+            full_attention_layers = sum(1 for idx in range(layers) if (idx + 1) % full_interval == 0)
+            linear_attention_layers = max(layers - full_attention_layers, 0)
 
-    attention_type = str(deep_get(cfg, "attention_type") or "").lower()
-    cache_type = str(deep_get(cfg, "cache_type") or "").lower()
+    attention_type = str(deep_get(metric_cfg, "attention_type") or "").lower()
+    cache_type = str(deep_get(metric_cfg, "cache_type") or "").lower()
     if not attention_type:
         if kv_lora_rank and qk_rope:
             attention_type = "mla"
-        elif linear_key_head_dim or linear_value_head_dim or "next" in model_l or "hybrid" in model_l:
+        elif linear_attention_layers or linear_key_head_dim or linear_value_head_dim or "next" in model_l or "hybrid" in model_l:
             attention_type = "hybrid"
         elif kv_heads != heads:
             attention_type = "gqa"
@@ -157,14 +177,15 @@ def descriptor_from_config(
         cache_type = {
             "mla": "latent_kv",
             "linear": "recurrent_state",
+            "hybrid": "hybrid",
             "sparse": "sparse_kv",
         }.get(attention_type, "kv")
 
-    moe_intermediate = as_int(deep_get(cfg, "moe_intermediate_size"))
-    dense_intermediate = as_int(deep_get(cfg, "intermediate_size", "ffn_hidden_size"))
-    first_dense = as_int(deep_get(cfg, "first_k_dense_replace"))
-    mlp_only = set(deep_get(cfg, "mlp_only_layers") or [])
-    sparse_step = max(as_int(deep_get(cfg, "decoder_sparse_step"), 1), 1)
+    moe_intermediate = as_int(deep_get(metric_cfg, "moe_intermediate_size"))
+    dense_intermediate = as_int(deep_get(metric_cfg, "intermediate_size", "ffn_hidden_size"))
+    first_dense = as_int(deep_get(metric_cfg, "first_k_dense_replace"))
+    mlp_only = set(deep_get(metric_cfg, "mlp_only_layers") or [])
+    sparse_step = max(as_int(deep_get(metric_cfg, "decoder_sparse_step"), 1), 1)
     if moe_intermediate:
         if first_dense:
             dense_layers = first_dense
@@ -178,7 +199,7 @@ def descriptor_from_config(
 
     desc = ArchitectureDescriptor(
         model_name=model_name,
-        model_type=str(cfg.get("model_type") or "unknown"),
+        model_type=str(deep_get(metric_cfg, "model_type") or cfg.get("model_type") or "unknown"),
         attention=AttentionDescriptor(
             type=attention_type,
             num_layers=layers,
@@ -196,7 +217,10 @@ def descriptor_from_config(
             linear_num_key_heads=linear_num_key_heads,
             linear_num_value_heads=linear_num_value_heads,
             linear_conv_kernel_dim=linear_conv_kernel_dim,
-            sparse_factor=as_float(deep_get(cfg, "sparse_factor"), 1.0),
+            layer_types=layer_types,
+            full_attention_layers=full_attention_layers,
+            linear_attention_layers=linear_attention_layers,
+            sparse_factor=as_float(deep_get(metric_cfg, "sparse_factor"), 1.0),
         ),
         cache=CacheDescriptor(
             type=cache_type,
@@ -205,19 +229,26 @@ def descriptor_from_config(
             num_key_value_heads=kv_heads,
             kv_lora_rank=kv_lora_rank,
             qk_rope_head_dim=qk_rope,
-            recurrent_state_size=_optional_int(deep_get(cfg, "recurrent_state_size")),
-            sparse_factor=as_float(deep_get(cfg, "cache_sparse_factor"), 1.0),
+            recurrent_state_size=_optional_int(deep_get(metric_cfg, "recurrent_state_size")),
+            full_attention_layers=full_attention_layers,
+            linear_attention_layers=linear_attention_layers,
+            linear_key_head_dim=linear_key_head_dim,
+            linear_value_head_dim=linear_value_head_dim,
+            linear_num_key_heads=linear_num_key_heads,
+            linear_num_value_heads=linear_num_value_heads,
+            linear_conv_kernel_dim=linear_conv_kernel_dim,
+            sparse_factor=as_float(deep_get(metric_cfg, "cache_sparse_factor"), 1.0),
         ),
         ffn=FFNDescriptor(dense_layers=dense_layers, hidden_size=hidden, dense_intermediate_size=dense_intermediate),
         moe=MoEDescriptor(
             enabled=bool(moe_intermediate),
             moe_layers=moe_layers,
-            routed_experts=as_int(deep_get(cfg, "num_experts", "num_experts_per_layer", "n_routed_experts", "n_experts")),
+            routed_experts=as_int(deep_get(metric_cfg, "num_experts", "num_experts_per_layer", "n_routed_experts", "n_experts")),
             shared_experts=as_int(deep_get(cfg, "n_shared_experts", "num_shared_experts", "shared_experts")),
-            top_k=as_int(deep_get(cfg, "num_experts_per_tok", "moe_top_k", "topk", "router_topk")),
+            top_k=as_int(deep_get(metric_cfg, "num_experts_per_tok", "moe_top_k", "topk", "router_topk")),
             hidden_size=hidden,
             expert_intermediate_size=moe_intermediate,
-            shared_expert_intermediate_size=_optional_int(deep_get(cfg, "shared_expert_intermediate_size")),
+            shared_expert_intermediate_size=_optional_int(deep_get(metric_cfg, "shared_expert_intermediate_size")),
         ),
         runtime=RuntimeDescriptor(
             precision_bytes=precision_bytes,

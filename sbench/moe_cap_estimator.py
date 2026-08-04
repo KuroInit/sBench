@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .components import AttentionComponent, CacheComponent, processed_tokens, real_expert_activation
+from .components import (
+    AttentionComponent,
+    CacheComponent,
+    _full_attention_projection_units,
+    _linear_attention_projection_units,
+    prefill_context_mass,
+    processed_tokens,
+    real_expert_activation,
+)
 from .descriptor import ArchitectureDescriptor
 from .estimator import EstimateResult, usable_records
 
@@ -21,9 +29,9 @@ def support_status(arch: ArchitectureDescriptor) -> MoeCapSupport:
     model_name = arch.model_name.lower()
     if not arch.moe.enabled:
         return MoeCapSupport(False, "MoE-CAP compatibility mode currently requires a MoE descriptor")
-    if "qwen" not in model_name and model_type not in {"qwen_moe", "qwen2_moe", "qwen3_moe"}:
+    if "qwen" not in model_name and model_type not in {"qwen_moe", "qwen2_moe", "qwen3_moe", "qwen3_5_moe", "qwen3_5_moe_text"}:
         return MoeCapSupport(False, "MoE-CAP compatibility mode currently supports Qwen MoE models first")
-    if not _is_qwen3(arch) and arch.moe.shared_expert_intermediate_size is None and arch.moe.shared_experts <= 0:
+    if not _is_qwen3_or_newer(arch) and arch.moe.shared_expert_intermediate_size is None and arch.moe.shared_experts <= 0:
         return MoeCapSupport(False, "Qwen MoE-CAP formula requires shared expert size")
     return MoeCapSupport(True)
 
@@ -54,7 +62,20 @@ def estimate_moe_cap_compatible(arch: ArchitectureDescriptor, records: Iterable[
         activation = _activation(arch, record)
         kv_sizes.append(_true_kv_size_mb(arch, record))
 
-        if constants["is_qwen3"]:
+        if constants["is_qwen35"]:
+            bandwidth_units = (
+                constants["moe_layers"] * (activation * constants["expert_size"] + constants["shared_experts_size_total"])
+                + constants["hybrid_attention_size_total"]
+                + constants["router_size"]
+                + kv_size
+            )
+            flops_units = (
+                constants["moe_layers"] * (constants["top_k"] * constants["expert_size"] + constants["shared_experts_size_total"])
+                + constants["hybrid_attention_size_total"]
+                + constants["router_size"]
+                + attention_score
+            )
+        elif constants["is_qwen3"]:
             bandwidth_units = (
                 constants["moe_layers"] * activation * constants["expert_size"]
                 + constants["dense_layers"] * constants["dense_ffn_size"]
@@ -113,19 +134,33 @@ def _qwen_constants(arch: ArchitectureDescriptor) -> dict[str, float]:
     else:
         shared = arch.moe.shared_experts * expert_size
     return {
+        "is_qwen35": _is_qwen35(arch),
         "is_qwen3": _is_qwen3(arch),
         "layers": float(arch.attention.num_layers),
         "moe_layers": float(arch.moe.moe_layers),
         "dense_layers": float(arch.ffn.dense_layers),
+        "top_k": float(max(arch.moe.top_k, 1)),
         "expert_size": expert_size,
         "dense_ffn_size": dense_ffn_size,
         "shared_experts_size_total": shared,
         "attention_size_per_token": AttentionComponent().projection_units(arch),
+        "hybrid_attention_size_total": _hybrid_attention_projection_units(arch),
+        "router_size": arch.moe.moe_layers * arch.moe.hidden_size * arch.moe.routed_experts / 1e12,
     }
 
 
+def _is_qwen35(arch: ArchitectureDescriptor) -> bool:
+    model_type = arch.model_type.lower()
+    model_name = arch.model_name.lower()
+    return "qwen3.5" in model_name or "qwen3_5" in model_type
+
+
+def _is_qwen3_or_newer(arch: ArchitectureDescriptor) -> bool:
+    return _is_qwen35(arch) or _is_qwen3(arch)
+
+
 def _is_qwen3(arch: ArchitectureDescriptor) -> bool:
-    return arch.model_type.lower() == "qwen3_moe" or "qwen3" in arch.model_name.lower()
+    return not _is_qwen35(arch) and (arch.model_type.lower() == "qwen3_moe" or "qwen3" in arch.model_name.lower())
 
 
 def _activation(arch: ArchitectureDescriptor, record: dict) -> float:
@@ -135,6 +170,17 @@ def _activation(arch: ArchitectureDescriptor, record: dict) -> float:
 def _attention_score(arch: ArchitectureDescriptor, record: dict) -> float:
     attn = arch.attention
     ctx = int(record.get("seq_lens_sum", 0) or 0)
+    if _is_qwen35(arch) and attn.type == "hybrid":
+        prefill = record.get("forward_mode") == "prefill"
+        token_count = max(processed_tokens(record) if prefill else int(record.get("batch_size", 1) or 1), 1)
+        context_mass = prefill_context_mass(record) if prefill else ctx
+        full_layers = attn.full_attention_layers or 0
+        linear_layers = attn.linear_attention_layers or max(attn.num_layers - full_layers, 0)
+        linear_heads = (attn.linear_num_key_heads or 0) + (attn.linear_num_value_heads or 0)
+        linear_dim = (attn.linear_key_head_dim or 0) + (attn.linear_value_head_dim or 0)
+        full_score = context_mass * full_layers * attn.num_attention_heads * attn.head_dim * 2
+        linear_score = token_count * linear_layers * max(linear_heads, 1) * max(linear_dim, attn.hidden_size)
+        return (full_score + linear_score) / max(token_count, 1) / 1e12
     if attn.type == "mla" and attn.qk_rope_head_dim is not None:
         q_head_dim = attn.qk_rope_head_dim + (attn.qk_nope_head_dim or 0)
         k_size = attn.num_layers * attn.num_attention_heads * q_head_dim
@@ -150,8 +196,19 @@ def _attention_score(arch: ArchitectureDescriptor, record: dict) -> float:
     return score / 1e12
 
 
+def _hybrid_attention_projection_units(arch: ArchitectureDescriptor) -> float:
+    attn = arch.attention
+    if attn.type != "hybrid":
+        return 0.0
+    full = (attn.full_attention_layers or 0) * _full_attention_projection_units(attn)
+    linear = (attn.linear_attention_layers or 0) * _linear_attention_projection_units(attn)
+    if not full and not linear:
+        return arch.attention.num_layers * AttentionComponent().projection_units(arch)
+    return (full + linear) / 1e12
+
+
 def _kv_size(arch: ArchitectureDescriptor, record: dict) -> float:
-    return processed_tokens(record) * CacheComponent().per_token_units(arch) / 1e12
+    return CacheComponent().estimate(arch, record).cache_units
 
 
 def _true_kv_size_mb(arch: ArchitectureDescriptor, record: dict) -> float:

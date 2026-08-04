@@ -111,3 +111,37 @@ def test_mini_swe_metric_sample_steps_overrides_num_samples():
 
     meta = {"dataset_config": {"runner": "mini_swe_agent", "num_samples": 200, "metric_sample_steps": 64}}
     assert analyze._metric_sample_limit(meta, "mini_swe_agent") == 64
+
+
+
+def test_write_plots_chunks_combined_smfu_smbu_images(tmp_path):
+    import analyze
+
+    rows = []
+    for dataset in ["a", "b", "c", "d", "e"]:
+        for batch in [2, 4]:
+            rows.append({
+                "run_status": "success",
+                "dataset": dataset,
+                "slug": "model",
+                "batch_size": batch,
+                "prefill_smbu": 10 + batch,
+                "decoding_smbu": 20 + batch,
+                "prefill_smfu": 1 + batch,
+                "decoding_smfu": 2 + batch,
+                "prefill_tokens_per_sec": 100 + batch,
+                "decoding_tokens_per_sec": 50 + batch,
+                "ttft": 0.1 + batch / 1000,
+                "tpot": 0.01 + batch / 1000,
+            })
+    (tmp_path / "prefill_smbu_a.png").write_text("stale")
+    analyze._write_plots(tmp_path, rows)
+    assert (tmp_path / "smbu_all_datasets_xlog_part1.png").exists()
+    assert (tmp_path / "smbu_all_datasets_xlog_part2.png").exists()
+    assert (tmp_path / "smfu_all_datasets_xlog_part1.png").exists()
+    assert (tmp_path / "smfu_all_datasets_xlog_part2.png").exists()
+    assert (tmp_path / "tokens_per_sec_all_datasets_xlog_part1.png").exists()
+    assert (tmp_path / "tokens_per_sec_all_datasets_xlog_part2.png").exists()
+    assert (tmp_path / "latency_all_datasets_xlog_part1.png").exists()
+    assert (tmp_path / "latency_all_datasets_xlog_part2.png").exists()
+    assert not (tmp_path / "prefill_smbu_a.png").exists()

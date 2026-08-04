@@ -73,11 +73,11 @@ def test_prefill_attention_score_scales_with_context_mass():
 
 
 def test_moe_bandwidth_uses_activation_but_flops_do_not():
-    desc = ArchitectureDescriptor(moe=MoEDescriptor(enabled=True, moe_layers=2, hidden_size=10, expert_intermediate_size=5, shared_experts=1))
+    desc = ArchitectureDescriptor(moe=MoEDescriptor(enabled=True, moe_layers=2, hidden_size=10, expert_intermediate_size=5, shared_experts=1, top_k=2))
     cost = MoEComponent().estimate(desc, {"expert_activation": 3})
     expert = 5 * 3 * 10 / 1e12
     assert cost.bandwidth_units == 2 * (3 * expert + expert)
-    assert cost.flops_units == 2 * (expert + expert)
+    assert cost.flops_units == 2 * (2 * expert + expert)
 
 
 
@@ -194,3 +194,85 @@ def test_moe_cap_qwen3_uses_dense_and_moe_layer_split():
     qwen15_result = estimate_moe_cap_compatible(qwen15_style, [record])
     assert qwen3_result.prefill_smbu > 0
     assert qwen3_result.prefill_smbu < qwen15_result.prefill_smbu
+
+
+def qwen35_35b_config():
+    return {
+        "model_type": "qwen3_5_moe",
+        "text_config": {
+            "model_type": "qwen3_5_moe_text",
+            "num_hidden_layers": 40,
+            "hidden_size": 2048,
+            "moe_intermediate_size": 512,
+            "shared_expert_intermediate_size": 512,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 2,
+            "head_dim": 256,
+            "linear_key_head_dim": 128,
+            "linear_value_head_dim": 128,
+            "linear_num_key_heads": 16,
+            "linear_num_value_heads": 32,
+            "linear_conv_kernel_dim": 4,
+            "num_experts": 256,
+            "num_experts_per_tok": 8,
+            "mlp_only_layers": [],
+            "layer_types": ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 10,
+        },
+    }
+
+
+def test_qwen35_35b_descriptor_counts_hybrid_layers_from_text_config():
+    desc = descriptor_from_config(qwen35_35b_config(), model_name="Qwen/Qwen3.5-35B-A3B")
+    assert desc.model_type == "qwen3_5_moe_text"
+    assert desc.attention.type == "hybrid"
+    assert desc.cache.type == "hybrid"
+    assert desc.attention.num_layers == 40
+    assert desc.attention.full_attention_layers == 10
+    assert desc.attention.linear_attention_layers == 30
+    assert desc.moe.enabled is True
+    assert desc.moe.moe_layers == 40
+    assert desc.ffn.dense_layers == 0
+    assert desc.moe.routed_experts == 256
+    assert desc.moe.top_k == 8
+    assert desc.moe.shared_expert_intermediate_size == 512
+
+
+def test_qwen35_hybrid_cache_uses_full_attention_layers_not_total_layers():
+    desc = descriptor_from_config(qwen35_35b_config(), model_name="Qwen/Qwen3.5-35B-A3B")
+    hybrid_units = CacheComponent().per_token_units(desc)
+    old_all_kv_units = 2 * desc.attention.num_layers * desc.attention.num_key_value_heads * desc.attention.head_dim
+    full_kv_units = 2 * desc.attention.full_attention_layers * desc.attention.num_key_value_heads * desc.attention.head_dim
+    assert hybrid_units >= full_kv_units
+    assert hybrid_units < old_all_kv_units
+
+
+def test_qwen35_hybrid_attention_score_uses_full_attention_layers_not_total_layers():
+    desc = descriptor_from_config(qwen35_35b_config(), model_name="Qwen/Qwen3.5-35B-A3B")
+    record = {"forward_mode": "decode", "seq_lens_sum": 1000, "batch_size": 4, "expert_activation": 8}
+    score = AttentionComponent().attention_score_units(desc, record)
+    old_dense_only_score = 1000 * desc.attention.num_layers * desc.attention.num_attention_heads * desc.attention.head_dim * 2 / 4 / 1e12
+    assert score < old_dense_only_score
+    assert score > 0
+
+
+def test_qwen35_moe_cap_uses_hybrid_formula_and_shared_expert():
+    desc = descriptor_from_config(
+        qwen35_35b_config(),
+        model_name="Qwen/Qwen3.5-35B-A3B",
+        precision_bytes=2,
+        num_gpus=1,
+        peak_bandwidth_tb=1,
+        peak_flops_tf=100,
+    )
+    record = {
+        "forward_mode": "prefill",
+        "latency": 1.0,
+        "seq_lens_sum": 100,
+        "batch_size": 1,
+        "processed_tokens": 100,
+        "expert_activation": 8,
+        "raw_probe_source": "expert_distribution_metrics",
+    }
+    result = estimate_moe_cap_compatible(desc, [record])
+    assert result.prefill_smbu > 0
+    assert result.prefill_smfu > 0

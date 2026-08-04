@@ -76,18 +76,36 @@ class CacheComponent:
             return cache.num_layers * (cache.kv_lora_rank + cache.qk_rope_head_dim)
         if cache.type == "recurrent_state":
             return cache.num_layers * float(cache.recurrent_state_size or 0)
+        if cache.type == "hybrid":
+            full_layers = cache.full_attention_layers or cache.num_layers
+            return 2 * full_layers * cache.head_dim * cache.num_key_value_heads
         scale = cache.sparse_factor if cache.type == "sparse_kv" else 1.0
         return scale * 2 * cache.num_layers * cache.head_dim * cache.num_key_value_heads
 
     def estimate(self, arch: ArchitectureDescriptor, record: dict) -> ComponentCost:
-        units = processed_tokens(record) * self.per_token_units(arch) / 1e12
+        units = processed_tokens(record) * self.per_token_units(arch)
+        if arch.cache.type == "hybrid":
+            units += max(int(record.get("batch_size", 1) or 1), 1) * self.state_units(arch)
+        units /= 1e12
         return ComponentCost(name=self.name, cache_units=units)
+
+    def state_units(self, arch: ArchitectureDescriptor) -> float:
+        cache = arch.cache
+        if cache.type != "hybrid":
+            return 0.0
+        return cache.linear_attention_layers * _linear_state_units(
+            cache.linear_num_key_heads,
+            cache.linear_num_value_heads,
+            cache.linear_key_head_dim,
+            cache.linear_value_head_dim,
+        )
 
 
 class AttentionComponent:
     name = "attention"
 
     def projection_units(self, arch: ArchitectureDescriptor) -> float:
+        """Return one full-attention layer's projection units for legacy formulas."""
         attn = arch.attention
         if attn.type == "mla" and attn.kv_lora_rank is not None and attn.qk_rope_head_dim is not None:
             q_head_dim = attn.qk_rope_head_dim + (attn.qk_nope_head_dim or 0)
@@ -107,6 +125,16 @@ class AttentionComponent:
             + attn.num_attention_heads * attn.head_dim * attn.hidden_size
         ) / 1e12
 
+    def total_projection_units(self, arch: ArchitectureDescriptor) -> float:
+        attn = arch.attention
+        if attn.type == "hybrid" and (attn.linear_key_head_dim or attn.linear_value_head_dim or attn.linear_attention_layers):
+            full = (attn.full_attention_layers or 0) * _full_attention_projection_units(attn)
+            linear = (attn.linear_attention_layers or 0) * _linear_attention_projection_units(attn)
+            if not full and not linear:
+                return attn.num_layers * self.projection_units(arch)
+            return (full + linear) / 1e12
+        return attn.num_layers * self.projection_units(arch)
+
     def attention_score_units(self, arch: ArchitectureDescriptor, record: dict) -> float:
         attn = arch.attention
         ctx = int(record.get("seq_lens_sum", 0))
@@ -119,8 +147,10 @@ class AttentionComponent:
         elif attn.type == "hybrid" and (attn.linear_key_head_dim or attn.linear_value_head_dim):
             linear_heads = (attn.linear_num_key_heads or 0) + (attn.linear_num_value_heads or 0)
             linear_dim = (attn.linear_key_head_dim or 0) + (attn.linear_value_head_dim or 0)
-            dense_part = context_mass * attn.num_layers * attn.num_attention_heads * attn.head_dim * 2
-            linear_part = token_count * attn.num_layers * max(linear_heads, 1) * max(linear_dim, attn.hidden_size)
+            full_layers = attn.full_attention_layers or 0
+            linear_layers = attn.linear_attention_layers or max(attn.num_layers - full_layers, 0)
+            dense_part = context_mass * full_layers * attn.num_attention_heads * attn.head_dim * 2
+            linear_part = token_count * linear_layers * max(linear_heads, 1) * max(linear_dim, attn.hidden_size)
             total = dense_part + linear_part
         elif attn.type == "mla" and attn.qk_rope_head_dim is not None:
             q_head_dim = attn.qk_rope_head_dim + (attn.qk_nope_head_dim or 0)
@@ -135,7 +165,7 @@ class AttentionComponent:
         return units / token_count
 
     def estimate(self, arch: ArchitectureDescriptor, record: dict) -> ComponentCost:
-        projection = self.projection_units(arch)
+        projection = self.total_projection_units(arch)
         return ComponentCost(
             name=self.name,
             bandwidth_units=projection,
@@ -169,7 +199,7 @@ class MoEComponent:
         return ComponentCost(
             name=self.name,
             bandwidth_units=moe.moe_layers * (activation * expert_size + shared),
-            flops_units=moe.moe_layers * (expert_size + shared),
+            flops_units=moe.moe_layers * (max(moe.top_k, 1) * expert_size + shared),
         )
 
 
@@ -205,3 +235,30 @@ DEFAULT_COMPONENTS: tuple[CostComponent, ...] = (
     MoEComponent(),
     RouterComponent(),
 )
+
+
+def _full_attention_projection_units(attn) -> float:
+    q = attn.num_attention_heads * attn.head_dim
+    kv = attn.num_key_value_heads * attn.head_dim
+    return attn.hidden_size * (q + kv + kv + q)
+
+
+def _linear_attention_projection_units(attn) -> float:
+    key_heads = attn.linear_num_key_heads or attn.num_attention_heads
+    value_heads = attn.linear_num_value_heads or attn.num_attention_heads
+    key_dim = attn.linear_key_head_dim or attn.head_dim
+    value_dim = attn.linear_value_head_dim or attn.head_dim
+    key_units = key_heads * key_dim
+    value_units = value_heads * value_dim
+    conv = (attn.linear_conv_kernel_dim or 0) * (2 * key_units + value_units)
+    return attn.hidden_size * (2 * key_units + 2 * value_units) + attn.hidden_size * (2 * value_heads) + value_units * attn.hidden_size + conv
+
+
+def _linear_state_units(
+    key_heads: int | None,
+    value_heads: int | None,
+    key_dim: int | None,
+    value_dim: int | None,
+) -> float:
+    heads = max(value_heads or key_heads or 0, 0)
+    return float(2 * heads * (key_dim or 0) * (value_dim or 0))

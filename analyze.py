@@ -206,38 +206,101 @@ def _write_plots(results_dir: Path, rows: list[dict[str, Any]]) -> None:
         import matplotlib.pyplot as plt
     except Exception:
         return
+
+    _remove_stale_plot_files(results_dir)
+
     success = [row for row in rows if row.get("run_status") == "success"]
     datasets = sorted({row.get("dataset") for row in success if row.get("dataset")})
-    metrics = [
-        ("prefill_smfu", "Prefill S-MFU (%)"),
-        ("prefill_smbu", "Prefill S-MBU (%)"),
-        ("decoding_smfu", "Decoding S-MFU (%)"),
-        ("decoding_smbu", "Decoding S-MBU (%)"),
-        ("prefill_tokens_per_sec", "Prefill tokens/sec"),
-        ("decoding_tokens_per_sec", "Decoding tokens/sec"),
+    if not datasets:
+        return
+
+    plot_specs = [
+        ("smbu", "S-MBU", "S-MBU (%)", "prefill_smbu", "decoding_smbu", "Prefill", "Decode"),
+        ("smfu", "S-MFU", "S-MFU (%)", "prefill_smfu", "decoding_smfu", "Prefill", "Decode"),
+        ("tokens_per_sec", "Throughput", "Tokens/sec", "prefill_tokens_per_sec", "decoding_tokens_per_sec", "Prefill", "Decode"),
+        ("latency", "Latency", "Latency (ms)", "ttft", "tpot", "TTFT", "TPOT"),
     ]
-    for dataset in datasets:
-        subset = [row for row in success if row.get("dataset") == dataset]
-        slugs = sorted({row.get("slug") for row in subset})
-        for key, label in metrics:
-            if not any(row.get(key) not in (None, "", 0) for row in subset):
-                continue
-            fig, ax = plt.subplots(figsize=(8, 6))
-            for slug in slugs:
-                points = sorted(
-                    (int(row.get("batch_size") or 0), float(row.get(key) or 0))
-                    for row in subset
-                    if row.get("slug") == slug
-                )
-                if points:
-                    ax.plot([p[0] for p in points], [p[1] for p in points], "o-", label=slug)
-            ax.set_xlabel("Batch Size")
-            ax.set_ylabel(label)
-            ax.set_title(f"{label} - {dataset}")
-            ax.legend(loc="best")
-            fig.tight_layout()
-            fig.savefig(results_dir / f"{key}_{dataset}.png", dpi=150)
+    for prefix, title, ylabel, prefill_key, decode_key, prefill_phase, decode_phase in plot_specs:
+        for part_idx, dataset_chunk in enumerate(_chunks(datasets, 4), start=1):
+            fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
+            axes = axes.flatten()
+            for ax, dataset in zip(axes, dataset_chunk):
+                subset = [row for row in success if row.get("dataset") == dataset]
+                slugs = sorted({row.get("slug") for row in subset if row.get("slug")})
+                for slug in slugs:
+                    points = sorted(
+                        (
+                            int(row.get("batch_size") or 0),
+                            _plot_value(row, prefill_key),
+                            _plot_value(row, decode_key),
+                        )
+                        for row in subset
+                        if row.get("slug") == slug and int(row.get("batch_size") or 0) > 0
+                    )
+                    if not points:
+                        continue
+                    batch = [point[0] for point in points]
+                    prefill = [point[1] for point in points]
+                    decode = [point[2] for point in points]
+                    if len(slugs) == 1:
+                        prefill_label = prefill_phase
+                        decode_label = decode_phase
+                    else:
+                        prefill_label = f"{slug} {prefill_phase}"
+                        decode_label = f"{slug} {decode_phase}"
+                    ax.plot(batch, prefill, marker="o", linewidth=2, label=prefill_label)
+                    ax.plot(batch, decode, marker="s", linewidth=2, label=decode_label)
+                ax.set_title(str(dataset).replace("_", " ").title())
+                ax.set_xscale("log", base=2)
+                batch_ticks = sorted({int(row.get("batch_size") or 0) for row in subset if int(row.get("batch_size") or 0) > 0})
+                if batch_ticks:
+                    ax.set_xticks(batch_ticks)
+                    ax.set_xticklabels([str(value) for value in batch_ticks])
+                ax.set_xlabel("Batch size (log2 scale)")
+                ax.set_ylabel(ylabel)
+                ax.grid(True, which="major", alpha=0.3)
+                ax.grid(True, which="minor", alpha=0.12)
+                ax.legend(title="Phase", loc="best")
+            for ax in axes[len(dataset_chunk):]:
+                ax.axis("off")
+            suffix = "" if len(datasets) <= 4 else f"_part{part_idx}"
+            fig.suptitle(f"{title} by Dataset: Prefill vs Decode", fontsize=16)
+            fig.tight_layout(rect=(0, 0, 1, 0.96))
+            fig.savefig(results_dir / f"{prefix}_all_datasets_xlog{suffix}.png", dpi=180)
             plt.close(fig)
+
+
+def _plot_value(row: dict[str, Any], key: str) -> float:
+    value = float(row.get(key) or 0)
+    if key in {"ttft", "tpot"}:
+        return value * 1000
+    return value
+
+
+def _remove_stale_plot_files(results_dir: Path) -> None:
+    patterns = [
+        "prefill_smfu_*.png",
+        "prefill_smbu_*.png",
+        "decoding_smfu_*.png",
+        "decoding_smbu_*.png",
+        "prefill_tokens_per_sec_*.png",
+        "decoding_tokens_per_sec_*.png",
+        "tokens_per_sec_all_datasets_xlog*.png",
+        "latency_all_datasets_xlog*.png",
+        "smfu_all_datasets_xlog*.png",
+        "smbu_all_datasets_xlog*.png",
+    ]
+    for pattern in patterns:
+        for path in results_dir.glob(pattern):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def _chunks(values: list[Any], size: int) -> list[list[Any]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
 
 def _precision_bytes(precision: str) -> float:
     return 4.0 if precision in {"float32", "fp32"} else 1.0 if precision in {"int8", "fp8"} else 0.5 if precision in {"int4", "fp4"} else 2.0
