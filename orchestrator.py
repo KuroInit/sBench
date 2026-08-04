@@ -221,7 +221,6 @@ def start_sglang(
         str(batch_size),
     ]
     append_sglang_server_flags(cmd, sglang_server_flags)
-    append_sglang_server_flags(cmd, model.get("sglang_server_flags"))
     return subprocess.Popen(cmd, env=env)
 
 

@@ -1,4 +1,4 @@
-batch_sizes: [2, 4, 8, 16, 32]
+batch_sizes: [2, 4, 8, 16, 32, 64, 128]
 benchmark_types:
   prefill: [batched_prefill]
   chat: [sharegpt]
@@ -10,12 +10,12 @@ estimator_mode: component-wise
 # SGLang options:
 #   - --disable-custom-all-reduce
 #   - --disable-radix-cache
-#   - --context-length: 4096
-#   - --chunked-prefill-size: 4096
-#   - --max-prefill-tokens: 4096
+#   - --context-length: 40960
+#   - --chunked-prefill-size: 16384
+#   - --max-prefill-tokens: 40960
 #   - --mem-fraction-static: 0.90
 #   - --dtype: bfloat16
-#   - --served-model-name: qwen3_5_35b_a3b
+#   - --served-model-name: qwen3_30b
 #   - --expert-distribution-recorder-mode: stat
 #   - --enable-return-routed-experts
 #   - --enable-expert-distribution-metrics
@@ -27,12 +27,12 @@ sglang_server_flags:
   - --enable-expert-distribution-metrics
 
 models:
-  - id: Qwen/Qwen3.5-35B-A3B
-    slug: qwen3_5_35b_a3b
+  - id: Qwen/Qwen3-30B-A3B
+    slug: qwen3_30b
     tp: 4
     sglang_server_flags:
-      - --served-model-name: qwen3_5_35b_a3b
+      - --served-model-name: qwen3_30b
       - --dtype: bfloat16
-      - --context-length: 4096
-      - --chunked-prefill-size: 4096
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
       - --mem-fraction-static: 0.90

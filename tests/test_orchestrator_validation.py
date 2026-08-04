@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import time
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from orchestrator import (
     merged_sglang_server_flags,
     model_precision,
     run_signature,
+    start_sglang,
     sweep_plan,
     validate_config,
     validate_probe_file,
@@ -169,3 +171,28 @@ def test_sglang_server_flags_support_strings_and_key_values():
         "--mem-fraction-static",
         "0.85",
     ]
+
+
+def test_start_sglang_uses_resolved_flags_once(monkeypatch):
+    captured = {}
+
+    def fake_popen(cmd, env):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return SimpleNamespace()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    start_sglang(
+        {"id": "Qwen/Test", "tp": 4, "sglang_server_flags": [{"--context-length": 4096}]},
+        8,
+        30000,
+        {},
+        sglang_server_flags=[
+            {"--context-length": 40960},
+            {"--chunked-prefill-size": 16384},
+        ],
+    )
+    assert captured["cmd"].count("--context-length") == 1
+    assert captured["cmd"].count("--chunked-prefill-size") == 1
+    assert "40960" in captured["cmd"]
+    assert "4096" not in captured["cmd"]
