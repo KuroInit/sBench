@@ -3,7 +3,7 @@ import os
 import time
 from types import SimpleNamespace
 
-from orchestrator import Checkpoint, run_signature, sweep_plan, validate_probe_file, validate_request_results
+from orchestrator import Checkpoint, append_sglang_server_flags, run_signature, sweep_plan, validate_probe_file, validate_request_results
 
 
 def test_partial_request_failures_fail_by_default():
@@ -67,4 +67,25 @@ def test_sweep_plan_is_dataset_major():
         ("azure_chat", "a", 4),
         ("azure_chat", "b", 2),
         ("azure_chat", "b", 4),
+    ]
+
+
+def test_sglang_server_flags_support_strings_and_key_values():
+    cmd = ["python"]
+    append_sglang_server_flags(
+        cmd,
+        [
+            "--disable-custom-all-reduce",
+            {"--watchdog-timeout": 600},
+            {"--log-requests": False},
+            {"--mem-fraction-static": 0.85},
+        ],
+    )
+    assert cmd == [
+        "python",
+        "--disable-custom-all-reduce",
+        "--watchdog-timeout",
+        "600",
+        "--mem-fraction-static",
+        "0.85",
     ]

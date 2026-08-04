@@ -38,7 +38,6 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
     plan = sweep_plan(config)
     total = len(plan)
     done = 0
-    estimator_mode = _estimator_mode(config)
     for dataset, model, bs in plan:
         done += 1
         slug = model["slug"]
@@ -60,7 +59,13 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
         env["PYTHONPATH"] = str(PROJECT_ROOT) if not existing_pythonpath else f"{PROJECT_ROOT}:{existing_pythonpath}"
         env["SBENCH_GPU_TYPE"] = env.get("ANALYZE_GPU_TYPE", env.get("SBENCH_GPU_TYPE", "unknown"))
         set_probe_model_env(env, model)
-        proc = start_sglang(model, int(bs), port, env, estimator_mode=estimator_mode)
+        proc = start_sglang(
+            model,
+            int(bs),
+            port,
+            env,
+            sglang_server_flags=config.get("sglang_server_flags"),
+        )
         try:
             if not wait_health(port, proc):
                 error = f"SGLang failed to start, code={proc.poll()}"
@@ -147,7 +152,14 @@ def first_int(cfg: dict[str, Any], *keys: str) -> int | None:
     return None
 
 
-def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[str, str], *, estimator_mode: str = "component-wise") -> subprocess.Popen:
+def start_sglang(
+    model: dict[str, Any],
+    batch_size: int,
+    port: int,
+    env: dict[str, str],
+    *,
+    sglang_server_flags: Any = None,
+) -> subprocess.Popen:
     cmd = [
         sys.executable,
         "-m",
@@ -161,25 +173,40 @@ def start_sglang(model: dict[str, Any], batch_size: int, port: int, env: dict[st
         "--max-running-requests",
         str(batch_size),
     ]
-    if os.environ.get("DISABLE_RADIX_CACHE", "1").lower() not in {"0", "false", "no"}:
-        cmd.append("--disable-radix-cache")
-    for src, flag in (("chunked_prefill_size", "--chunked-prefill-size"), ("max_prefill_tokens", "--max-prefill-tokens"), ("mem_fraction_static", "--mem-fraction-static"), ("context_length", "--context-length")):
-        if model.get(src) is not None:
-            cmd += [flag, str(model[src])]
-    if model.get("served_model_name"):
-        cmd += ["--served-model-name", str(model["served_model_name"])]
-    if model.get("dtype"):
-        cmd += ["--dtype", str(model["dtype"])]
-    if estimator_mode == "moe-cap" and _model_looks_moe(model):
-        cmd += [
-            "--expert-distribution-recorder-mode",
-            "stat",
-            "--enable-return-routed-experts",
-            "--enable-expert-distribution-metrics",
-        ]
-    if model.get("chat_template"):
-        cmd += ["--chat-template", str(model["chat_template"])]
+    append_sglang_server_flags(cmd, sglang_server_flags)
+    append_sglang_server_flags(cmd, model.get("sglang_server_flags"))
     return subprocess.Popen(cmd, env=env)
+
+
+def append_sglang_server_flags(cmd: list[str], flags: Any) -> None:
+    for flag, value in iter_sglang_server_flags(flags):
+        if value is False or value is None:
+            continue
+        cmd.append(flag)
+        if value is not True:
+            cmd.append(str(value))
+
+
+def iter_sglang_server_flags(flags: Any) -> list[tuple[str, Any]]:
+    if not flags:
+        return []
+    if isinstance(flags, str):
+        return [(flags, True)]
+    if isinstance(flags, dict):
+        return [(str(flag), value) for flag, value in flags.items()]
+    if isinstance(flags, list):
+        out: list[tuple[str, Any]] = []
+        for item in flags:
+            out.extend(iter_sglang_server_flags(item))
+        return out
+    raise TypeError(f"unsupported sglang_server_flags entry: {flags!r}")
+
+
+def model_served_name(model: dict[str, Any]) -> str | None:
+    for flag, value in iter_sglang_server_flags(model.get("sglang_server_flags")):
+        if flag == "--served-model-name" and value not in {None, False, True}:
+            return str(value)
+    return None
 
 
 def wait_health(port: int, proc: subprocess.Popen, timeout: int = 1500) -> bool:
@@ -241,8 +268,9 @@ def load_dataset_config(dataset: str, model: dict[str, Any]) -> dict[str, Any]:
             break
     if model.get("id"):
         cfg.setdefault("model_id", model["id"])
-    if cfg.get("runner") == "mini_swe_agent" and model.get("served_model_name"):
-        cfg.setdefault("mini_model_name", f"openai/{model['served_model_name']}")
+    served_name = model_served_name(model)
+    if cfg.get("runner") == "mini_swe_agent" and served_name:
+        cfg.setdefault("mini_model_name", f"openai/{served_name}")
     return cfg
 
 
@@ -269,13 +297,6 @@ def _estimator_mode(config: dict[str, Any]) -> str:
         raise SystemExit(f"unsupported estimator_mode={mode!r}; expected component-wise or moe-cap")
     return mode
 
-
-def _model_looks_moe(model: dict[str, Any]) -> bool:
-    cfg = model.get("hf_config") or model.get("architecture") or {}
-    if isinstance(cfg, dict) and cfg.get("moe_intermediate_size"):
-        return True
-    model_id = str(model.get("id") or "").lower()
-    return "moe" in model_id or "a3b" in model_id or "a22b" in model_id
 
 def validate_request_results(results: list[Any], cfg: dict[str, Any]) -> tuple[bool, str]:
     if not results:
@@ -314,6 +335,7 @@ def validate_probe_file(path: Path) -> tuple[bool, str]:
 
 
 def run_signature(model: dict[str, Any], batch_size: int, dataset: str, dataset_cfg: dict[str, Any]) -> str:
+    sweep_cfg = load_yaml(SWEEP_CONFIG)
     payload = {
         "model_id": model.get("id"),
         "slug": model.get("slug"),
@@ -323,7 +345,9 @@ def run_signature(model: dict[str, Any], batch_size: int, dataset: str, dataset_
         "dataset_cfg": dataset_cfg,
         "hf_config": model.get("hf_config") or model.get("architecture"),
         "probe_schema": 1,
-        "estimator_mode": _estimator_mode(load_yaml(SWEEP_CONFIG)),
+        "estimator_mode": _estimator_mode(sweep_cfg),
+        "sglang_server_flags": sweep_cfg.get("sglang_server_flags"),
+        "model_sglang_server_flags": model.get("sglang_server_flags"),
     }
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
