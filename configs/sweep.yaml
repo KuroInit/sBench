@@ -45,7 +45,7 @@ models:
     slug: qwen3_5_35b_a3b
     served_model_name: qwen3_5_35b_a3b
     dtype: bfloat16
-    context_length: 262144
+    context_length: 8192
     tp: 4
     mem_fraction_static: 0.90
     chunked_prefill_size: 16384
