@@ -36,13 +36,23 @@ def main() -> None:
 def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
     port = int(config.get("port", 30000))
     plan = sweep_plan(config)
+    model_configs, config_errors = load_model_configs(config.get("models", []))
     total = len(plan)
     done = 0
     for dataset, model, bs in plan:
         done += 1
+        config_key = model_config_cache_key(model)
+        resolved_config = model_configs.get(config_key)
+        if resolved_config is None:
+            error = config_errors.get(config_key, "model config.json is required but was not loaded")
+            mark_config_failure(checkpoint, model, dataset, int(bs), error)
+            continue
+        model = dict(model, resolved_hf_config=resolved_config)
         slug = model["slug"]
-        dataset_cfg = load_dataset_config(dataset, model)
-        signature = run_signature(model, int(bs), dataset, dataset_cfg)
+        server_flags = merged_sglang_server_flags(config, model)
+        model["resolved_sglang_server_flags"] = server_flags
+        dataset_cfg = load_dataset_config(dataset, model, server_flags)
+        signature = run_signature(model, int(bs), dataset, dataset_cfg, resolved_config, architecture_overrides=architecture_overrides(model, dataset_cfg))
         if checkpoint.is_done(slug, int(bs), dataset, signature):
             print(f"[sweep] [{done}/{total}] skip {slug} bs={bs} {dataset}: done")
             continue
@@ -64,7 +74,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             int(bs),
             port,
             env,
-            sglang_server_flags=config.get("sglang_server_flags"),
+            sglang_server_flags=server_flags,
         )
         try:
             if not wait_health(port, proc):
@@ -117,6 +127,37 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
     print(f"[sweep] complete {done}/{total}")
 
 
+def load_model_configs(models: list[dict[str, Any]]) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], str]]:
+    configs = {}
+    failures = {}
+    for model in models:
+        key = model_config_cache_key(model)
+        model_id = model["id"]
+        if key in configs or key in failures:
+            continue
+        try:
+            configs[key] = load_required_hf_config(model_id, model.get("config_loader"))
+        except Exception as exc:
+            failures[key] = f"model config.json is required but could not be loaded: {exc}"
+    for (model_id, _), error in failures.items():
+        print(f"[sweep] config error for {model_id}: {error}", file=sys.stderr)
+    return configs, failures
+
+
+def model_config_cache_key(model: dict[str, Any]) -> tuple[str, str]:
+    loader = json.dumps(model.get("config_loader") or {}, sort_keys=True, default=str)
+    return str(model["id"]), loader
+
+
+def mark_config_failure(checkpoint: "Checkpoint", model: dict[str, Any], dataset: str, batch_size: int, error: str) -> None:
+    slug = model.get("slug", safe_model_leaf(model.get("id", "")))
+    output_dir = Path(RESULTS_DIR) / slug / f"bs{batch_size}" / dataset
+    leaf_dir = output_dir / safe_model_leaf(model.get("id", ""))
+    write_failure(leaf_dir, dataset, model, batch_size, error)
+    signature = run_signature(model, batch_size, dataset, {"config_error": error}, {})
+    checkpoint.mark(slug, batch_size, dataset, "failed", signature, error, model.get("id"))
+
+
 def sweep_plan(config: dict[str, Any]) -> list[tuple[str, dict[str, Any], int]]:
     """Return dataset-major execution order: dataset -> model -> batch size."""
 
@@ -129,7 +170,7 @@ def sweep_plan(config: dict[str, Any]) -> list[tuple[str, dict[str, Any], int]]:
 
 
 def set_probe_model_env(env: dict[str, str], model: dict[str, Any]) -> None:
-    cfg = model.get("hf_config") or model.get("architecture") or {}
+    cfg = model_config_for_metrics(model)
     num_experts = first_int(cfg, "num_experts", "num_experts_per_layer", "n_routed_experts", "n_experts")
     top_k = first_int(cfg, "num_experts_per_tok", "moe_top_k", "topk", "router_topk")
     if num_experts is not None:
@@ -149,6 +190,12 @@ def first_int(cfg: dict[str, Any], *keys: str) -> int | None:
             continue
         if parsed > 0:
             return parsed
+    if isinstance(cfg, dict):
+        for value in cfg.values():
+            if isinstance(value, dict):
+                parsed = first_int(value, *keys)
+                if parsed is not None:
+                    return parsed
     return None
 
 
@@ -202,11 +249,12 @@ def iter_sglang_server_flags(flags: Any) -> list[tuple[str, Any]]:
     raise TypeError(f"unsupported sglang_server_flags entry: {flags!r}")
 
 
-def model_served_name(model: dict[str, Any]) -> str | None:
-    for flag, value in iter_sglang_server_flags(model.get("sglang_server_flags")):
+def model_served_name(flags: Any) -> str | None:
+    served_name = None
+    for flag, value in iter_sglang_server_flags(flags):
         if flag == "--served-model-name" and value not in {None, False, True}:
-            return str(value)
-    return None
+            served_name = str(value)
+    return served_name
 
 
 def wait_health(port: int, proc: subprocess.Popen, timeout: int = 1500) -> bool:
@@ -253,11 +301,40 @@ def validate_config(config: dict[str, Any]) -> None:
             raise SystemExit(f"{dataset} config declares dataset_names={names}, which does not include {dataset}")
     if not config.get("models"):
         raise SystemExit("models is required")
+    for model in config.get("models", []):
+        if model.get("hf_config") is not None:
+            raise SystemExit("models must not define hf_config; model architecture is loaded from config.json")
+        validate_architecture_overrides(model.get("architecture"))
+        validate_config_loader(model.get("config_loader"))
     if not config.get("batch_sizes"):
         raise SystemExit("batch_sizes is required")
 
 
-def load_dataset_config(dataset: str, model: dict[str, Any]) -> dict[str, Any]:
+def validate_architecture_overrides(overrides: Any) -> None:
+    if overrides is None:
+        return
+    if not isinstance(overrides, dict):
+        raise SystemExit("model architecture overrides must be a mapping")
+    allowed = {"attention", "cache", "ffn", "moe", "runtime"}
+    invalid = sorted(set(overrides) - allowed)
+    if invalid:
+        names = ", ".join(invalid)
+        raise SystemExit(f"model architecture overrides must use component keys only; invalid keys: {names}")
+
+
+def validate_config_loader(options: Any) -> None:
+    if options is None:
+        return
+    if not isinstance(options, dict):
+        raise SystemExit("model config_loader must be a mapping")
+    allowed = {"local_files_only", "revision", "cache_dir", "token", "trust_remote_code"}
+    invalid = sorted(set(options) - allowed)
+    if invalid:
+        names = ", ".join(invalid)
+        raise SystemExit(f"model config_loader contains unsupported keys: {names}")
+
+
+def load_dataset_config(dataset: str, model: dict[str, Any], server_flags: Any = None) -> dict[str, Any]:
     path = PROJECT_ROOT / "configs" / f"{dataset}.yaml"
     cfg = load_yaml(str(path)) if path.exists() else {"dataset_names": [dataset]}
     cfg = dict(cfg)
@@ -268,7 +345,7 @@ def load_dataset_config(dataset: str, model: dict[str, Any]) -> dict[str, Any]:
             break
     if model.get("id"):
         cfg.setdefault("model_id", model["id"])
-    served_name = model_served_name(model)
+    served_name = model_served_name(server_flags or model.get("sglang_server_flags"))
     if cfg.get("runner") == "mini_swe_agent" and served_name:
         cfg.setdefault("mini_model_name", f"openai/{served_name}")
     return cfg
@@ -334,7 +411,14 @@ def validate_probe_file(path: Path) -> tuple[bool, str]:
     return True, ""
 
 
-def run_signature(model: dict[str, Any], batch_size: int, dataset: str, dataset_cfg: dict[str, Any]) -> str:
+def run_signature(
+    model: dict[str, Any],
+    batch_size: int,
+    dataset: str,
+    dataset_cfg: dict[str, Any],
+    hf_config: dict[str, Any] | None = None,
+    architecture_overrides: dict[str, Any] | None = None,
+) -> str:
     sweep_cfg = load_yaml(SWEEP_CONFIG)
     payload = {
         "model_id": model.get("id"),
@@ -343,7 +427,8 @@ def run_signature(model: dict[str, Any], batch_size: int, dataset: str, dataset_
         "batch_size": batch_size,
         "dataset": dataset,
         "dataset_cfg": dataset_cfg,
-        "hf_config": model.get("hf_config") or model.get("architecture"),
+        "hf_config": hf_config if hf_config is not None else model_config_for_metrics(model),
+        "architecture_overrides": architecture_overrides if architecture_overrides is not None else architecture_overrides_for_signature(model, dataset_cfg),
         "probe_schema": 1,
         "estimator_mode": _estimator_mode(sweep_cfg),
         "sglang_server_flags": sweep_cfg.get("sglang_server_flags"),
@@ -361,12 +446,14 @@ def safe_model_leaf(model_id: str) -> str:
 
 
 def write_metadata(leaf: Path, dataset: str, model: dict[str, Any], batch_size: int, cfg: dict[str, Any]) -> None:
-    hf_config = model.get("hf_config") or model.get("architecture") or _try_load_hf_config(model.get("id", ""))
+    hf_config = model_config_for_metrics(model)
+    server_flags = model.get("resolved_sglang_server_flags")
     payload = {
-        "model_config": {"model_name": model["id"], "precision": cfg.get("precision", "bfloat16")},
+        "model_config": {"model_name": model["id"], "precision": model_precision(model, cfg)},
         "hardware": {"num_gpus": model.get("tp", 1), "gpu_type": os.environ.get("SBENCH_GPU_TYPE", "unknown")},
         "system_environment": {"batch_size": batch_size},
-        "architecture_overrides": cfg.get("architecture", {}),
+        "architecture_overrides": architecture_overrides(model, cfg),
+        "sglang_server_flags": server_flags,
         "hf_config": hf_config,
         "dataset_config": cfg,
     }
@@ -388,14 +475,62 @@ def write_failure(leaf: Path, dataset: str, model: dict[str, Any], batch_size: i
 
 
 
-def _try_load_hf_config(model_id: str) -> dict[str, Any]:
+def model_config_for_metrics(model: dict[str, Any]) -> dict[str, Any]:
+    cfg = model.get("resolved_hf_config")
+    if isinstance(cfg, dict) and cfg:
+        return cfg
+    raise ValueError(f"model config.json has not been loaded for {model.get('id')!r}")
+
+
+def load_required_hf_config(model_id: str, loader_options: dict[str, Any] | None = None) -> dict[str, Any]:
     if not model_id:
-        return {}
+        raise ValueError("model id/path is empty")
     try:
         from transformers import AutoConfig
-        return AutoConfig.from_pretrained(model_id, trust_remote_code=True).to_dict()
-    except Exception:
-        return {}
+
+        cfg = AutoConfig.from_pretrained(model_id, **auto_config_kwargs(loader_options)).to_dict()
+    except Exception as exc:
+        raise ValueError(f"failed to load config.json for {model_id!r}: {exc}") from exc
+    if not cfg:
+        raise ValueError(f"empty config.json for {model_id!r}")
+    return cfg
+
+
+def auto_config_kwargs(options: dict[str, Any] | None = None) -> dict[str, Any]:
+    options = options or {}
+    kwargs = {"trust_remote_code": bool(options.get("trust_remote_code", True))}
+    for key in ("revision", "cache_dir", "token"):
+        value = options.get(key)
+        if isinstance(value, str):
+            value = os.path.expanduser(os.path.expandvars(value))
+        if value not in {None, ""}:
+            kwargs[key] = value
+    if "local_files_only" in options:
+        kwargs["local_files_only"] = bool(options["local_files_only"])
+    return kwargs
+
+
+def merged_sglang_server_flags(config: dict[str, Any], model: dict[str, Any]) -> list[Any]:
+    flags = []
+    flags.extend(config.get("sglang_server_flags") or [])
+    flags.extend(model.get("sglang_server_flags") or [])
+    return flags
+
+
+def model_precision(model: dict[str, Any], dataset_cfg: dict[str, Any]) -> str:
+    precision = None
+    for flag, value in iter_sglang_server_flags(model.get("resolved_sglang_server_flags")):
+        if flag == "--dtype" and value not in {None, False, True}:
+            precision = str(value)
+    return precision or str(dataset_cfg.get("precision", "bfloat16"))
+
+
+def architecture_overrides(model: dict[str, Any], dataset_cfg: dict[str, Any]) -> dict[str, Any]:
+    return model.get("architecture") or dataset_cfg.get("architecture", {}) or {}
+
+
+def architecture_overrides_for_signature(model: dict[str, Any], dataset_cfg: dict[str, Any]) -> dict[str, Any]:
+    return architecture_overrides(model, dataset_cfg)
 
 class Checkpoint:
     def __init__(self, path: str) -> None:

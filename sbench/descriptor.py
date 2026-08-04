@@ -153,14 +153,16 @@ def descriptor_from_config(
     linear_num_key_heads = _optional_int(deep_get(metric_cfg, "linear_num_key_heads"))
     linear_num_value_heads = _optional_int(deep_get(metric_cfg, "linear_num_value_heads"))
     linear_conv_kernel_dim = _optional_int(deep_get(metric_cfg, "linear_conv_kernel_dim"))
-    layer_types = tuple(str(item) for item in (deep_get(metric_cfg, "layer_types") or ()) if item)
+    raw_layer_types = deep_get(metric_cfg, "layer_types") or ()
+    layer_types = tuple(str(item) for item in raw_layer_types if item)
     full_attention_layers = sum(1 for item in layer_types if item == "full_attention")
     linear_attention_layers = sum(1 for item in layer_types if item == "linear_attention")
     if not layer_types:
         full_interval = as_int(deep_get(metric_cfg, "full_attention_interval"))
         if full_interval > 0:
-            full_attention_layers = sum(1 for idx in range(layers) if (idx + 1) % full_interval == 0)
-            linear_attention_layers = max(layers - full_attention_layers, 0)
+            layer_types = derive_periodic_layer_types(layers, full_interval)
+            full_attention_layers = sum(1 for item in layer_types if item == "full_attention")
+            linear_attention_layers = sum(1 for item in layer_types if item == "linear_attention")
 
     attention_type = str(deep_get(metric_cfg, "attention_type") or "").lower()
     cache_type = str(deep_get(metric_cfg, "cache_type") or "").lower()
@@ -270,6 +272,15 @@ def apply_architecture_overrides(desc: ArchitectureDescriptor, overrides: Mappin
         ffn=_patch(desc.ffn, overrides.get("ffn")),
         moe=_patch(desc.moe, overrides.get("moe")),
         runtime=_patch(desc.runtime, overrides.get("runtime")),
+    )
+
+
+def derive_periodic_layer_types(num_layers: int, full_attention_interval: int) -> tuple[str, ...]:
+    if num_layers <= 0 or full_attention_interval <= 0:
+        return ()
+    return tuple(
+        "full_attention" if (idx + 1) % full_attention_interval == 0 else "linear_attention"
+        for idx in range(num_layers)
     )
 
 

@@ -1,5 +1,3 @@
-"""Adapter registry for assembling architecture descriptors and component mixes."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -50,6 +48,8 @@ class BaseAdapter:
 
 
 class DenseTransformerAdapter(BaseAdapter):
+    """Fallback for dense MHA/GQA models without MoE, MLA, sparse, or hybrid attention."""
+
     name = "dense_transformer"
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:
@@ -57,6 +57,8 @@ class DenseTransformerAdapter(BaseAdapter):
 
 
 class QwenMoEAdapter(BaseAdapter):
+    """Qwen1.5/Qwen2/Qwen3 MoE when the attention stack is standard MHA/GQA."""
+
     name = "qwen_moe"
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:
@@ -64,6 +66,8 @@ class QwenMoEAdapter(BaseAdapter):
 
 
 class QwenHybridAdapter(BaseAdapter):
+    """Qwen hybrid attention MoE, including Qwen3-Next and Qwen3.5/Qwen3.6 A3B."""
+
     name = "qwen_hybrid"
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:
@@ -72,6 +76,8 @@ class QwenHybridAdapter(BaseAdapter):
 
 
 class DeepSeekMLAAdapter(BaseAdapter):
+    """DeepSeek MLA models using latent KV cache fields such as kv_lora_rank."""
+
     name = "deepseek_mla"
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:
@@ -79,6 +85,8 @@ class DeepSeekMLAAdapter(BaseAdapter):
 
 
 class DeepSeekSparseAdapter(BaseAdapter):
+    """DeepSeek sparse-attention variants selected through architecture overrides."""
+
     name = "deepseek_sparse"
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:
@@ -87,6 +95,8 @@ class DeepSeekSparseAdapter(BaseAdapter):
 
 
 class LinearAttentionAdapter(BaseAdapter):
+    """Generic non-Qwen linear attention selected through config or YAML overrides."""
+
     name = "linear_attention"
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:

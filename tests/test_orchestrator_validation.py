@@ -3,7 +3,21 @@ import os
 import time
 from types import SimpleNamespace
 
-from orchestrator import Checkpoint, append_sglang_server_flags, run_signature, sweep_plan, validate_probe_file, validate_request_results
+import pytest
+
+from orchestrator import (
+    Checkpoint,
+    append_sglang_server_flags,
+    auto_config_kwargs,
+    load_dataset_config,
+    merged_sglang_server_flags,
+    model_precision,
+    run_signature,
+    sweep_plan,
+    validate_config,
+    validate_probe_file,
+    validate_request_results,
+)
 
 
 def test_partial_request_failures_fail_by_default():
@@ -44,8 +58,9 @@ def test_probe_file_requires_schema_fields(tmp_path):
 def test_checkpoint_signature_prevents_stale_skip(tmp_path):
     checkpoint = Checkpoint(str(tmp_path / "checkpoint.yaml"))
     model = {"id": "Qwen/A", "slug": "qwen", "tp": 1}
-    sig_a = run_signature(model, 2, "batched_prefill", {"target_input_tokens": 128})
-    sig_b = run_signature(model, 2, "batched_prefill", {"target_input_tokens": 256})
+    hf_config = {"num_hidden_layers": 1, "hidden_size": 8}
+    sig_a = run_signature(model, 2, "batched_prefill", {"target_input_tokens": 128}, hf_config)
+    sig_b = run_signature(model, 2, "batched_prefill", {"target_input_tokens": 256}, hf_config)
     checkpoint.mark("qwen", 2, "batched_prefill", "success", sig_a, model_id="Qwen/A")
     assert checkpoint.is_done("qwen", 2, "batched_prefill", sig_a)
     assert not checkpoint.is_done("qwen", 2, "batched_prefill", sig_b)
@@ -68,6 +83,46 @@ def test_sweep_plan_is_dataset_major():
         ("azure_chat", "b", 2),
         ("azure_chat", "b", 4),
     ]
+
+
+def test_validate_config_rejects_hardcoded_model_hf_config():
+    config = {
+        "batch_sizes": [2],
+        "benchmark_types": {"prefill": ["batched_prefill"]},
+        "models": [{"id": "Qwen/Test", "slug": "qwen", "hf_config": {"num_hidden_layers": 1}}],
+    }
+    with pytest.raises(SystemExit, match="must not define hf_config"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_architecture_as_full_config():
+    config = {
+        "batch_sizes": [2],
+        "benchmark_types": {"prefill": ["batched_prefill"]},
+        "models": [{"id": "Qwen/Test", "slug": "qwen", "architecture": {"num_hidden_layers": 1}}],
+    }
+    with pytest.raises(SystemExit, match="component keys only"):
+        validate_config(config)
+
+
+def test_config_loader_options_expand_paths(monkeypatch):
+    monkeypatch.setenv("HF_HOME", "/tmp/hf-cache")
+    kwargs = auto_config_kwargs({"local_files_only": True, "revision": "main", "cache_dir": "$HF_HOME", "trust_remote_code": False})
+    assert kwargs == {
+        "trust_remote_code": False,
+        "revision": "main",
+        "cache_dir": "/tmp/hf-cache",
+        "local_files_only": True,
+    }
+
+
+def test_global_and_model_server_flags_are_merged_for_metadata_and_mini_swe():
+    config = {"sglang_server_flags": [{"--dtype": "float16"}, {"--served-model-name": "global-name"}]}
+    model = {"id": "Qwen/Test", "slug": "qwen", "sglang_server_flags": [{"--served-model-name": "model-name"}]}
+    flags = merged_sglang_server_flags(config, model)
+    assert model_precision({"resolved_sglang_server_flags": flags}, {}) == "float16"
+    dataset_cfg = load_dataset_config("mini_swe_agent", model, flags)
+    assert dataset_cfg["mini_model_name"] == "openai/model-name"
 
 
 def test_sglang_server_flags_support_strings_and_key_values():

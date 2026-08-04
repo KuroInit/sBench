@@ -64,6 +64,9 @@ def main() -> None:
         gpu = os.environ.get("ANALYZE_GPU_TYPE") or meta.get("hardware", {}).get("gpu_type") or records[0].get("gpu_raw_type")
         overrides = {"architecture": meta.get("architecture_overrides", {})}
         cfg = meta.get("hf_config", {})
+        if not cfg:
+            rows.append(_synthetic_failure_row(leaf, results_dir, "model config.json is required but missing from metadata"))
+            continue
         try:
             adapter = resolve_adapter(
                 cfg,

@@ -30,6 +30,12 @@ Set the datasets under `benchmark_types`, then add the models under `models`.
 The harness runs every selected model against every selected dataset and batch
 size in that file.
 
+Model architecture is loaded from the model `config.json` through
+`transformers.AutoConfig` using the model id/path in `models[].id`. Do not copy
+full `hf_config` blocks into `configs/sweep.yaml`; the run fails if `config.json`
+cannot be loaded. Use model `architecture` overrides only for fields that are
+missing, renamed, or intentionally corrected.
+
 ```bash
 ./scripts/run_sweep.sh
 ```
