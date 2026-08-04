@@ -9,7 +9,9 @@ from orchestrator import (
     Checkpoint,
     append_sglang_server_flags,
     auto_config_kwargs,
+    hf_hub_download_kwargs,
     load_dataset_config,
+    load_required_hf_config,
     merged_sglang_server_flags,
     model_precision,
     run_signature,
@@ -114,6 +116,29 @@ def test_config_loader_options_expand_paths(monkeypatch):
         "cache_dir": "/tmp/hf-cache",
         "local_files_only": True,
     }
+
+
+def test_hf_hub_download_options_exclude_auto_config_only_options(monkeypatch):
+    monkeypatch.setenv("HF_HOME", "/tmp/hf-cache")
+    kwargs = hf_hub_download_kwargs({"local_files_only": True, "cache_dir": "$HF_HOME", "trust_remote_code": True})
+    assert kwargs == {"cache_dir": "/tmp/hf-cache", "local_files_only": True}
+
+
+def test_load_required_hf_config_reads_raw_local_config_for_unknown_model_type(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model_type": "qwen3_5_moe",
+                "num_hidden_layers": 48,
+                "hidden_size": 4096,
+                "num_experts": 128,
+            }
+        )
+    )
+    cfg = load_required_hf_config(str(tmp_path))
+    assert cfg["model_type"] == "qwen3_5_moe"
+    assert cfg["num_experts"] == 128
 
 
 def test_global_and_model_server_flags_are_merged_for_metadata_and_mini_swe():

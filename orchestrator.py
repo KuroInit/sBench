@@ -485,20 +485,70 @@ def model_config_for_metrics(model: dict[str, Any]) -> dict[str, Any]:
 def load_required_hf_config(model_id: str, loader_options: dict[str, Any] | None = None) -> dict[str, Any]:
     if not model_id:
         raise ValueError("model id/path is empty")
+    local_cfg = read_local_config_json(model_id)
+    if local_cfg:
+        return local_cfg
+    errors = []
     try:
         from transformers import AutoConfig
 
         cfg = AutoConfig.from_pretrained(model_id, **auto_config_kwargs(loader_options)).to_dict()
+        if cfg:
+            return cfg
     except Exception as exc:
-        raise ValueError(f"failed to load config.json for {model_id!r}: {exc}") from exc
-    if not cfg:
-        raise ValueError(f"empty config.json for {model_id!r}")
-    return cfg
+        errors.append(f"AutoConfig failed: {exc}")
+    try:
+        cfg = load_raw_hf_config_json(model_id, loader_options)
+        if cfg:
+            return cfg
+    except Exception as exc:
+        errors.append(f"raw config.json failed: {exc}")
+    detail = "; ".join(errors) if errors else "empty config.json"
+    raise ValueError(f"failed to load config.json for {model_id!r}: {detail}")
+
+
+def read_local_config_json(model_id: str) -> dict[str, Any]:
+    path = Path(os.path.expanduser(os.path.expandvars(model_id)))
+    if path.is_dir():
+        path = path / "config.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:
+        raise ValueError(f"failed to parse local config.json at {path}: {exc}") from exc
+    if not isinstance(data, dict) or not data:
+        raise ValueError(f"local config.json at {path} is empty or invalid")
+    return data
+
+
+def load_raw_hf_config_json(model_id: str, loader_options: dict[str, Any] | None = None) -> dict[str, Any]:
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(repo_id=model_id, filename="config.json", **hf_hub_download_kwargs(loader_options))
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict) or not data:
+        raise ValueError("downloaded config.json is empty or invalid")
+    return data
 
 
 def auto_config_kwargs(options: dict[str, Any] | None = None) -> dict[str, Any]:
     options = options or {}
     kwargs = {"trust_remote_code": bool(options.get("trust_remote_code", True))}
+    for key in ("revision", "cache_dir", "token"):
+        value = options.get(key)
+        if isinstance(value, str):
+            value = os.path.expanduser(os.path.expandvars(value))
+        if value not in {None, ""}:
+            kwargs[key] = value
+    if "local_files_only" in options:
+        kwargs["local_files_only"] = bool(options["local_files_only"])
+    return kwargs
+
+
+def hf_hub_download_kwargs(options: dict[str, Any] | None = None) -> dict[str, Any]:
+    options = options or {}
+    kwargs = {}
     for key in ("revision", "cache_dir", "token"):
         value = options.get(key)
         if isinstance(value, str):
