@@ -1,4 +1,4 @@
-batch_sizes: [2, 4, 8, 16, 32, 64, 128]
+batch_sizes: [2]
 benchmark_types:
   prefill: [batched_prefill]
   chat: [sharegpt]
@@ -59,15 +59,15 @@ models:
   #     - --mem-fraction-static: 0.90
 
   # Standard Qwen3 MoE. Supports component-wise and MoE-CAP compatibility modes.
-  # - id: Qwen/Qwen3-30B-A3B
-  #   slug: qwen3_30b_a3b
-  #   tp: 4
-  #   sglang_server_flags:
-  #     - --served-model-name: qwen3_30b_a3b
-  #     - --dtype: bfloat16
-  #     - --context-length: 40960
-  #     - --chunked-prefill-size: 16384
-  #     - --mem-fraction-static: 0.90
+  - id: Qwen/Qwen3-30B-A3B
+    slug: qwen3_30b_a3b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_30b_a3b
+      - --dtype: bfloat16
+      - --context-length: 32768
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
 
   # Qwen3.5/Qwen3.6 dense hybrid linear/full-attention models.
   # - id: Qwen/Qwen3.5-9B
@@ -102,12 +102,12 @@ models:
   #     - --mem-fraction-static: 0.90
 
   # Moonshot MoE using DeepSeek-V3 MLA-style architecture.
-  - id: moonshotai/Moonlight-16B-A3B
-    slug: moonlight_16b_a3b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: moonlight_16b_a3b
-      - --dtype: bfloat16
-      - --context-length: 40960
-      - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
+  # - id: moonshotai/Moonlight-16B-A3B
+  #   slug: moonlight_16b_a3b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: moonlight_16b_a3b
+  #     - --dtype: bfloat16
+  #     - --context-length: 8192
+  #     - --chunked-prefill-size: 4096
+  #     - --mem-fraction-static: 0.90
