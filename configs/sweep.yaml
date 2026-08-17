@@ -27,11 +27,86 @@ sglang_server_flags:
   - --enable-expert-distribution-metrics
 
 models:
-  - id: Qwen/Qwen3-30B-A3B
-    slug: qwen3_30b
+  # Dense Qwen3 (GQA)
+  - id: Qwen/Qwen3-8B
+    slug: qwen3_8b
     tp: 4
     sglang_server_flags:
-      - --served-model-name: qwen3_30b
+      - --served-model-name: qwen3_8b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  - id: Qwen/Qwen3-14B
+    slug: qwen3_14b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_14b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  - id: Qwen/Qwen3-32B
+    slug: qwen3_32b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_32b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  # Standard Qwen3 MoE. Supports component-wise and MoE-CAP compatibility modes.
+  - id: Qwen/Qwen3-30B-A3B
+    slug: qwen3_30b_a3b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_30b_a3b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  # Qwen3.5/Qwen3.6 dense hybrid linear/full-attention models.
+  - id: Qwen/Qwen3.5-9B
+    slug: qwen3_5_9b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_5_9b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  - id: Qwen/Qwen3.6-27B
+    slug: qwen3_6_27b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_6_27b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  # Hybrid MoE. Supports component-wise and MoE-CAP compatibility modes.
+  - id: Qwen/Qwen3.6-35B-A3B
+    slug: qwen3_6_35b_a3b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: qwen3_6_35b_a3b
+      - --dtype: bfloat16
+      - --context-length: 40960
+      - --chunked-prefill-size: 16384
+      - --mem-fraction-static: 0.90
+
+  # Moonshot MoE using DeepSeek-V3 MLA-style architecture.
+  - id: moonshotai/Moonlight-16B-A3B
+    slug: moonlight_16b_a3b
+    tp: 4
+    sglang_server_flags:
+      - --served-model-name: moonlight_16b_a3b
       - --dtype: bfloat16
       - --context-length: 40960
       - --chunked-prefill-size: 16384

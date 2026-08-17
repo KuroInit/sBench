@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from sbench.mini_swe_agent_runner import build_mini_swe_agent_command, configure_openai_env, mini_swe_outputs_exist
+from sbench.mini_swe_agent_runner import build_mini_swe_agent_command, configure_openai_env, mini_swe_outputs_exist, run_mini_swe_agent, validate_mini_swe_predictions
 
 
 def test_builds_docker_command_with_default_openai_model(tmp_path):
@@ -34,6 +34,16 @@ def test_builds_singularity_command_and_instance_filter(tmp_path):
     assert command[-2:] == ["-i", "sympy__sympy-15599"]
 
 
+def test_issue_count_becomes_a_single_issue_slice(tmp_path):
+    command = build_mini_swe_agent_command(
+        model_id="Qwen/Test",
+        batch_size=1,
+        dataset_cfg={"environment_class": "singularity", "issue_count": 1},
+        output_dir=tmp_path,
+    )
+    assert command[command.index("--slice") + 1] == "0:1"
+
+
 def test_rejects_unknown_environment_class(tmp_path):
     with pytest.raises(ValueError, match="environment_class"):
         build_mini_swe_agent_command(model_id="Qwen/Test", batch_size=1, dataset_cfg={"environment_class": "podman"}, output_dir=tmp_path)
@@ -48,8 +58,35 @@ def test_configure_openai_env_points_at_local_sglang():
     assert env["SBENCH_MINI_MODEL"] == "openai/Qwen/Test"
 
 
-def test_mini_swe_output_validation_ignores_internal_logs(tmp_path):
+def test_mini_swe_output_validation_requires_valid_submission(tmp_path):
     (tmp_path / "mini_swe_agent_run_1.json").write_text("{}")
     assert not mini_swe_outputs_exist(tmp_path, {})
-    (tmp_path / "preds.jsonl").write_text("{}\n")
+    (tmp_path / "preds.json").write_text('{"repo__issue": {"instance_id": "repo__issue", "model_patch": "diff --git a/a b/a"}}')
     assert mini_swe_outputs_exist(tmp_path, {})
+
+
+def test_mini_swe_submission_rejects_missing_patch(tmp_path):
+    (tmp_path / "preds.json").write_text('{"repo__issue": {"instance_id": "repo__issue", "model_patch": ""}}')
+    assert "no model_patch" in validate_mini_swe_predictions(tmp_path, {"issue_count": 1})
+
+
+def test_mini_swe_attempt_does_not_accept_parent_artifacts(tmp_path, monkeypatch):
+    (tmp_path / "preds.jsonl").write_text("old result\n")
+
+    class CompletedProcess:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return None
+
+    monkeypatch.setattr("sbench.mini_swe_agent_runner.subprocess.Popen", lambda *args, **kwargs: CompletedProcess())
+    result = run_mini_swe_agent(
+        api_base="http://127.0.0.1:30000",
+        model_id="Qwen/Test",
+        batch_size=1,
+        dataset_cfg={"environment_class": "docker"},
+        output_dir=tmp_path,
+    )
+    assert not result.success
+    assert "produced no preds.json submission file" in result.error
+    assert Path(result.output_dir).parent == tmp_path

@@ -89,7 +89,11 @@ def resolve_instance_ids(cfg: dict[str, Any]) -> list[str]:
     subset = str(cfg.get("subset", "lite")).lower()
     dataset_name = str(cfg.get("prewarm_hf_dataset") or DEFAULT_DATASETS.get(subset, DEFAULT_DATASETS["lite"]))
     split = str(cfg.get("prewarm_split") or cfg.get("split") or "test")
-    limit_slice = parse_slice(cfg.get("prewarm_slice") or slice_from_extra_args(cfg.get("extra_args") or []))
+    limit_slice = parse_slice(
+        cfg.get("prewarm_slice")
+        or slice_from_extra_args(cfg.get("extra_args") or [])
+        or issue_count_slice(cfg.get("issue_count"))
+    )
 
     try:
         return load_instance_ids(dataset_name, split, limit_slice)
@@ -129,6 +133,15 @@ def slice_from_extra_args(extra_args: list[Any]) -> str | None:
         if arg.startswith("--slice="):
             return arg.split("=", 1)[1]
     return None
+
+
+def issue_count_slice(value: Any) -> str | None:
+    if value is None:
+        return None
+    count = int(value)
+    if count <= 0:
+        raise ValueError("issue_count must be positive")
+    return f"0:{count}"
 
 
 def parse_slice(value: str | None) -> slice | None:

@@ -22,6 +22,26 @@ def test_qwen3_descriptor_counts_moe_layers():
     assert desc.moe.top_k == 8
 
 
+@pytest.mark.parametrize(
+    ("model_name", "config", "adapter_name", "attention_type", "moe_enabled", "moe_cap_supported"),
+    [
+        ("Qwen/Qwen3-8B", {"model_type": "qwen3", "num_hidden_layers": 36, "hidden_size": 4096, "intermediate_size": 12288, "num_attention_heads": 32, "num_key_value_heads": 8, "head_dim": 128}, "dense_transformer", "gqa", False, False),
+        ("Qwen/Qwen3-14B", {"model_type": "qwen3", "num_hidden_layers": 40, "hidden_size": 5120, "intermediate_size": 17408, "num_attention_heads": 40, "num_key_value_heads": 8, "head_dim": 128}, "dense_transformer", "gqa", False, False),
+        ("Qwen/Qwen3-32B", {"model_type": "qwen3", "num_hidden_layers": 64, "hidden_size": 5120, "intermediate_size": 25600, "num_attention_heads": 64, "num_key_value_heads": 8, "head_dim": 128}, "dense_transformer", "gqa", False, False),
+        ("Qwen/Qwen3-30B-A3B", {"model_type": "qwen3_moe", "num_hidden_layers": 48, "hidden_size": 2048, "intermediate_size": 6144, "moe_intermediate_size": 768, "num_attention_heads": 32, "num_key_value_heads": 4, "head_dim": 128, "num_experts": 128, "num_experts_per_tok": 8, "decoder_sparse_step": 1, "mlp_only_layers": []}, "qwen_moe", "gqa", True, True),
+        ("Qwen/Qwen3.5-9B", {"model_type": "qwen3_5", "text_config": {"model_type": "qwen3_5_text", "num_hidden_layers": 32, "hidden_size": 4096, "intermediate_size": 12288, "num_attention_heads": 16, "num_key_value_heads": 4, "head_dim": 256, "linear_key_head_dim": 128, "linear_value_head_dim": 128, "linear_num_key_heads": 16, "linear_num_value_heads": 32, "layer_types": ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8}}, "qwen_hybrid", "hybrid", False, False),
+        ("Qwen/Qwen3.6-27B", {"model_type": "qwen3_5", "text_config": {"model_type": "qwen3_5_text", "num_hidden_layers": 64, "hidden_size": 5120, "intermediate_size": 17408, "num_attention_heads": 24, "num_key_value_heads": 4, "head_dim": 256, "linear_key_head_dim": 128, "linear_value_head_dim": 128, "linear_num_key_heads": 16, "linear_num_value_heads": 48, "layer_types": ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 16}}, "qwen_hybrid", "hybrid", False, False),
+        ("moonshotai/Moonlight-16B-A3B", {"model_type": "deepseek_v3", "num_hidden_layers": 27, "hidden_size": 2048, "intermediate_size": 11264, "moe_intermediate_size": 1408, "num_attention_heads": 16, "num_key_value_heads": 16, "kv_lora_rank": 512, "qk_rope_head_dim": 64, "qk_nope_head_dim": 128, "v_head_dim": 128, "first_k_dense_replace": 1, "n_routed_experts": 64, "n_shared_experts": 2, "num_experts_per_tok": 6}, "deepseek_mla", "mla", True, False),
+    ],
+)
+def test_supported_qwen_model_configs_resolve_to_expected_estimator_path(model_name, config, adapter_name, attention_type, moe_enabled, moe_cap_supported):
+    result = resolve_adapter(config, model_name=model_name)
+    assert result.name == adapter_name
+    assert result.descriptor.attention.type == attention_type
+    assert result.descriptor.moe.enabled is moe_enabled
+    assert support_status(result.descriptor).supported is moe_cap_supported
+
+
 def test_deepseek_descriptor_detects_mla_cache():
     desc = descriptor_from_config({
         "num_hidden_layers": 6,
@@ -105,9 +125,26 @@ def test_estimator_preserves_packed_prefill_throughput_and_processed_tokens():
         cache=CacheDescriptor(type="kv", num_layers=1, head_dim=1, num_key_value_heads=1),
         runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
     )
-    result = estimate_records(desc, [{"forward_mode": "prefill", "latency": 2.0, "seq_lens_sum": 400, "batch_size": 4, "processed_tokens": 100}])
+    result = estimate_records(desc, [{"forward_mode": "prefill", "latency": 2.0, "seq_lens_sum": 400, "batch_size": 4, "processed_tokens": 100, "per_req_info": [{"extend_len": 25, "total_len": 100}] * 4}])
     assert result.prefill_tp == 200
     assert result.kv_size == 2e-4
+
+
+def test_estimator_rejects_multi_request_prefill_without_per_request_context():
+    desc = ArchitectureDescriptor(
+        attention=AttentionDescriptor(type="gqa", num_layers=1, hidden_size=1, num_attention_heads=1, num_key_value_heads=1, head_dim=1),
+        cache=CacheDescriptor(type="kv", num_layers=1, head_dim=1, num_key_value_heads=1),
+    )
+    result = estimate_records(desc, [{"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 2, "processed_tokens": 100}])
+    assert result.prefill_tp == 0
+
+
+def test_model_name_does_not_imply_hybrid_attention_without_config_evidence():
+    desc = descriptor_from_config(
+        {"num_hidden_layers": 2, "hidden_size": 16, "num_attention_heads": 2},
+        model_name="Qwen/Qwen3-Next-Example",
+    )
+    assert desc.attention.type == "mha"
 
 
 def test_adapter_registry_selects_component_mix():

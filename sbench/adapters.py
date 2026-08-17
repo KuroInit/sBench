@@ -72,7 +72,7 @@ class QwenHybridAdapter(BaseAdapter):
 
     def matches(self, config: Mapping[str, Any], model_name: str, overrides: Mapping[str, Any] | None) -> bool:
         attn_type = _override_attention_type(overrides) or _config_attention_type(config)
-        return "qwen" in model_name.lower() and ("next" in model_name.lower() or _has(config, "linear_key_head_dim") or attn_type in {"hybrid", "linear", "sparse"})
+        return "qwen" in model_name.lower() and (_has(config, "linear_key_head_dim") or attn_type in {"hybrid", "linear", "sparse"})
 
 
 class DeepSeekMLAAdapter(BaseAdapter):

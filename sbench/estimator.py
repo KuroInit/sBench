@@ -85,11 +85,24 @@ def usable_records(records: Iterable[dict]) -> list[dict]:
         record = dict(source)
         if record.get("forward_mode") == "prefill" and int(record.get("seq_lens_sum", 0)) <= 10:
             continue
+        if record.get("forward_mode") == "prefill" and not _has_reliable_prefill_context_mass(record):
+            continue
         latency = float(record.get("latency", 0) or 0)
         if latency <= 0:
             continue
         out.append(record)
     return out
+
+
+def _has_reliable_prefill_context_mass(record: dict) -> bool:
+    if int(record.get("batch_size", 1) or 1) <= 1:
+        return True
+    per_req_info = record.get("per_req_info") or []
+    return bool(per_req_info) and all(
+        int(req.get("extend_len", 0) or 0) > 0
+        and int(req.get("seq_len") or req.get("total_len") or 0) > 0
+        for req in per_req_info
+    )
 
 
 def _total_cost(costs: list[ComponentCost]) -> ComponentCost:

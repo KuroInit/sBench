@@ -1,19 +1,20 @@
 benchmark_type: agentic
 dataset_names: [mini_swe_agent]
-fixed_length_mode: false
 runner: mini_swe_agent
 subset: lite
 split: dev
 environment_class: singularity
 precision: bfloat16
 target_output_tokens: 0
-# For mini-SWE, num_samples controls metric sampling steps from probe records,
-# while --slice controls how many SWE-Bench issues/containers are launched.
 num_samples: 200
 metric_sample_steps: 200
+issue_count: 1
+min_success_rate: 1.0
+prefix_cache: true
 require_output_artifacts: true
+predictions_file: preds.json
 timeout_seconds: 14400
-extra_args: ["--slice", "0:8", "--redo-existing"]
+extra_args: ["--redo-existing"]
 
 # Optional:
 # binary: mini-extra

@@ -1,7 +1,10 @@
 benchmark_type: prefill
 dataset_names: [batched_prefill]
-fixed_length_mode: true
 target_input_tokens: 2048
 target_output_tokens: 1
+# Sent directly as input_ids, so target_input_tokens is exact and tokenizer-independent.
+synthetic_token_id: 100
 num_samples: 200
+min_success_rate: 1.0
+prefix_cache: false
 precision: bfloat16

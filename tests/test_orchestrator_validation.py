@@ -16,11 +16,13 @@ from orchestrator import (
     merged_sglang_server_flags,
     model_precision,
     run_signature,
+    required_probe_records,
     start_sglang,
     sweep_plan,
     validate_config,
     validate_probe_file,
     validate_request_results,
+    workload_sglang_server_flags,
 )
 
 
@@ -57,6 +59,29 @@ def test_probe_file_requires_schema_fields(tmp_path):
     ok, error = validate_probe_file(path)
     assert not ok
     assert "missing fields" in error
+
+
+def test_agentic_probe_file_enforces_metric_sample_floor(tmp_path):
+    path = tmp_path / "server_records.jsonl"
+    record = {
+        "forward_mode": "decode",
+        "latency": 1.0,
+        "seq_lens_sum": 100,
+        "batch_size": 1,
+    }
+    path.write_text("".join(json.dumps(record) + "\n" for _ in range(3)))
+    assert required_probe_records({"runner": "mini_swe_agent", "metric_sample_steps": 4}) == 4
+    ok, error = validate_probe_file(path, minimum_usable_records=4)
+    assert not ok
+    assert "only 3 usable records" in error
+
+
+def test_probe_file_requires_prefill_and_decode_when_requested(tmp_path):
+    path = tmp_path / "server_records.jsonl"
+    path.write_text(json.dumps({"forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1}) + "\n")
+    ok, error = validate_probe_file(path, required_forward_modes={"prefill", "decode"})
+    assert not ok
+    assert "decode" in error
 
 
 def test_checkpoint_signature_prevents_stale_skip(tmp_path):
@@ -171,6 +196,12 @@ def test_sglang_server_flags_support_strings_and_key_values():
         "--mem-fraction-static",
         "0.85",
     ]
+
+
+def test_workload_prefix_cache_overrides_global_radix_cache_setting():
+    flags = ["--disable-radix-cache", {"--dtype": "bfloat16"}]
+    assert "--disable-radix-cache" not in workload_sglang_server_flags(flags, {"prefix_cache": True})
+    assert "--disable-radix-cache" in workload_sglang_server_flags([], {"prefix_cache": False})
 
 
 def test_start_sglang_uses_resolved_flags_once(monkeypatch):

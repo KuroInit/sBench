@@ -63,6 +63,11 @@ def prefill_context_mass(record: dict) -> int:
             total += extend_len * seq_len
     if total:
         return total
+    if int(record.get("batch_size", 1) or 1) > 1:
+        raise ValueError(
+            "prefill attention estimation requires per_req_info for multi-request batches; "
+            "the aggregate fallback would overcount cross-request context mass"
+        )
     tokens = max(processed_tokens(record), 1)
     return tokens * int(record.get("seq_lens_sum", 0))
 

@@ -136,7 +136,6 @@ def descriptor_from_config(
     cfg = merge_dict(config, {k: v for k, v in (overrides or {}).items() if k != "architecture"})
     text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), Mapping) else None
     metric_cfg = merge_dict(cfg, text_cfg or {})
-    model_l = model_name.lower()
 
     layers = as_int(deep_get(metric_cfg, "num_hidden_layers", "n_layers"))
     hidden = as_int(deep_get(metric_cfg, "hidden_size", "d_model"))
@@ -169,7 +168,7 @@ def descriptor_from_config(
     if not attention_type:
         if kv_lora_rank and qk_rope:
             attention_type = "mla"
-        elif linear_attention_layers or linear_key_head_dim or linear_value_head_dim or "next" in model_l or "hybrid" in model_l:
+        elif linear_attention_layers or linear_key_head_dim or linear_value_head_dim:
             attention_type = "hybrid"
         elif kv_heads != heads:
             attention_type = "gqa"

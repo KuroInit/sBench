@@ -35,6 +35,7 @@ def main() -> None:
 
 def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
     port = int(config.get("port", 30000))
+    estimator_mode = _estimator_mode(config)
     plan = sweep_plan(config)
     model_configs, config_errors = load_model_configs(config.get("models", []))
     total = len(plan)
@@ -49,9 +50,10 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             continue
         model = dict(model, resolved_hf_config=resolved_config)
         slug = model["slug"]
-        server_flags = merged_sglang_server_flags(config, model)
+        base_server_flags = merged_sglang_server_flags(config, model)
+        dataset_cfg = load_dataset_config(dataset, model, base_server_flags)
+        server_flags = workload_sglang_server_flags(base_server_flags, dataset_cfg)
         model["resolved_sglang_server_flags"] = server_flags
-        dataset_cfg = load_dataset_config(dataset, model, server_flags)
         signature = run_signature(model, int(bs), dataset, dataset_cfg, resolved_config, architecture_overrides=architecture_overrides(model, dataset_cfg))
         if checkpoint.is_done(slug, int(bs), dataset, signature):
             print(f"[sweep] [{done}/{total}] skip {slug} bs={bs} {dataset}: done")
@@ -111,8 +113,12 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                     write_failure(leaf_dir, dataset, model, int(bs), error)
                     checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
                     continue
-            write_metadata(leaf_dir, dataset, model, int(bs), dataset_cfg)
-            ok, error = validate_probe_file(probe_path)
+            write_metadata(leaf_dir, dataset, model, int(bs), dataset_cfg, estimator_mode=estimator_mode)
+            ok, error = validate_probe_file(
+                probe_path,
+                minimum_usable_records=required_probe_records(dataset_cfg),
+                required_forward_modes={"prefill", "decode"},
+            )
             if not ok:
                 write_failure(leaf_dir, dataset, model, int(bs), error)
                 checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
@@ -298,6 +304,7 @@ def validate_config(config: dict[str, Any]) -> None:
         names = cfg.get("dataset_names")
         if names and dataset not in names:
             raise SystemExit(f"{dataset} config declares dataset_names={names}, which does not include {dataset}")
+        validate_dataset_config(dataset, cfg)
     if not config.get("models"):
         raise SystemExit("models is required")
     for model in config.get("models", []):
@@ -307,6 +314,30 @@ def validate_config(config: dict[str, Any]) -> None:
         validate_config_loader(model.get("config_loader"))
     if not config.get("batch_sizes"):
         raise SystemExit("batch_sizes is required")
+
+
+def validate_dataset_config(dataset: str, cfg: dict[str, Any]) -> None:
+    for key in ("num_samples", "target_output_tokens"):
+        if key in cfg and int(cfg[key]) < 0:
+            raise SystemExit(f"{dataset} {key} must be non-negative")
+    if int(cfg.get("num_samples", 1)) <= 0:
+        raise SystemExit(f"{dataset} num_samples must be positive")
+    if "max_input_tokens" in cfg and int(cfg["max_input_tokens"]) <= 0:
+        raise SystemExit(f"{dataset} max_input_tokens must be positive")
+    if "target_input_tokens" in cfg and int(cfg["target_input_tokens"]) <= 0:
+        raise SystemExit(f"{dataset} target_input_tokens must be positive")
+    min_success_rate = float(cfg.get("min_success_rate", 1.0))
+    if not 0.0 < min_success_rate <= 1.0:
+        raise SystemExit(f"{dataset} min_success_rate must be in (0, 1]")
+    if "prefix_cache" in cfg and not isinstance(cfg["prefix_cache"], bool):
+        raise SystemExit(f"{dataset} prefix_cache must be true or false")
+    if dataset == "mmlu_pro" and str(cfg.get("answer_mode", "direct")).lower() not in {"direct", "reasoning"}:
+        raise SystemExit("mmlu_pro answer_mode must be direct or reasoning")
+    if cfg.get("runner") == "mini_swe_agent":
+        if int(cfg.get("metric_sample_steps", cfg.get("num_samples", 0))) <= 0:
+            raise SystemExit(f"{dataset} metric_sample_steps must be positive")
+        if "issue_count" in cfg and int(cfg["issue_count"]) <= 0:
+            raise SystemExit(f"{dataset} issue_count must be positive")
 
 
 def validate_architecture_overrides(overrides: Any) -> None:
@@ -385,11 +416,28 @@ def validate_request_results(results: list[Any], cfg: dict[str, Any]) -> tuple[b
     return True, ""
 
 
-def validate_probe_file(path: Path) -> tuple[bool, str]:
+def required_probe_records(cfg: dict[str, Any]) -> int | None:
+    """Return a strict probe-record requirement for agentic metric sampling."""
+
+    if cfg.get("runner") != "mini_swe_agent":
+        return None
+    value = cfg.get("metric_sample_steps", cfg.get("num_samples"))
+    if value is None:
+        return None
+    required = int(value)
+    return required if required > 0 else None
+
+
+def validate_probe_file(
+    path: Path,
+    *,
+    minimum_usable_records: int | None = None,
+    required_forward_modes: set[str] | None = None,
+) -> tuple[bool, str]:
     if not path.exists() or path.stat().st_size == 0:
         return False, "probe produced no server_records file"
     required = {"forward_mode", "latency", "seq_lens_sum", "batch_size"}
-    count = 0
+    records = []
     try:
         for line_no, line in enumerate(path.read_text().splitlines(), start=1):
             if not line.strip():
@@ -402,11 +450,27 @@ def validate_probe_file(path: Path) -> tuple[bool, str]:
                 return False, f"probe record line {line_no} has unsupported forward_mode={record.get('forward_mode')!r}"
             if float(record.get("latency") or 0) <= 0:
                 return False, f"probe record line {line_no} has non-positive latency"
-            count += 1
+            records.append(record)
     except Exception as exc:
         return False, f"probe server_records file is invalid JSONL: {exc}"
-    if count == 0:
+    if not records:
         return False, "probe produced no usable records"
+    if required_forward_modes:
+        from sbench.estimator import usable_records
+
+        present = {str(record.get("forward_mode")) for record in usable_records(records)}
+        missing_modes = sorted(required_forward_modes - present)
+        if missing_modes:
+            return False, f"probe is missing required usable forward mode(s): {', '.join(missing_modes)}"
+    if minimum_usable_records is not None:
+        from sbench.estimator import usable_records
+
+        count = len(usable_records(records))
+        if count < minimum_usable_records:
+            return False, (
+                f"probe produced only {count} usable records; "
+                f"{minimum_usable_records} are required for metric sampling"
+            )
     return True, ""
 
 
@@ -444,7 +508,15 @@ def safe_model_leaf(model_id: str) -> str:
     return cleaned.replace("/", "__")
 
 
-def write_metadata(leaf: Path, dataset: str, model: dict[str, Any], batch_size: int, cfg: dict[str, Any]) -> None:
+def write_metadata(
+    leaf: Path,
+    dataset: str,
+    model: dict[str, Any],
+    batch_size: int,
+    cfg: dict[str, Any],
+    *,
+    estimator_mode: str,
+) -> None:
     hf_config = model_config_for_metrics(model)
     server_flags = model.get("resolved_sglang_server_flags")
     payload = {
@@ -452,6 +524,7 @@ def write_metadata(leaf: Path, dataset: str, model: dict[str, Any], batch_size: 
         "hardware": {"num_gpus": model.get("tp", 1), "gpu_type": os.environ.get("SBENCH_GPU_TYPE", "unknown")},
         "system_environment": {"batch_size": batch_size},
         "architecture_overrides": architecture_overrides(model, cfg),
+        "estimator_mode": estimator_mode,
         "sglang_server_flags": server_flags,
         "hf_config": hf_config,
         "dataset_config": cfg,
@@ -564,6 +637,25 @@ def merged_sglang_server_flags(config: dict[str, Any], model: dict[str, Any]) ->
     flags.extend(config.get("sglang_server_flags") or [])
     flags.extend(model.get("sglang_server_flags") or [])
     return flags
+
+
+def workload_sglang_server_flags(flags: Any, dataset_cfg: dict[str, Any]) -> list[Any]:
+    """Resolve one unambiguous SGLang flag set for a workload.
+
+    Radix caching is useful for agentic tool loops with a shared issue prefix,
+    but distorts the independent-request chat, reasoning, and prefill lanes.
+    Dataset YAML therefore owns this one server policy.
+    """
+
+    ordered: dict[str, Any] = {}
+    for flag, value in iter_sglang_server_flags(flags):
+        ordered[flag] = value
+    prefix_cache = dataset_cfg.get("prefix_cache")
+    if prefix_cache is True:
+        ordered.pop("--disable-radix-cache", None)
+    elif prefix_cache is False:
+        ordered["--disable-radix-cache"] = True
+    return [flag if value is True else {flag: value} for flag, value in ordered.items() if value is not None and value is not False]
 
 
 def model_precision(model: dict[str, Any], dataset_cfg: dict[str, Any]) -> str:

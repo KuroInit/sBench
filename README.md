@@ -115,12 +115,21 @@ subset: lite
 split: dev
 workers: 1
 environment_class: docker      # or singularity
+issue_count: 1
 ```
 
 The orchestrator starts the local SGLang server, points mini-SWE-agent at
 `http://127.0.0.1:<port>/v1`, and preserves the lightweight probe records for
 S-MFU/S-MBU analysis. Install mini-SWE-agent separately with the Docker or
 Singularity/Apptainer setup required by your machine.
+
+Batch-mode mini-SWE-agent writes `preds.json`. sBench requires one nonempty
+`model_patch` submission per selected issue before accepting the run. This
+validates that the agent submitted a patch, not that the patch solves the issue:
+run the official SWE-Bench evaluator separately when correctness is required.
+For Singularity runs, prewarming derives its image selection from the same
+`issue_count`, `instance_ids`, or explicit `prewarm_slice` setting as the agent
+run.
 
 When running the harness itself in Docker, `environment_class: docker` uses the
 host Docker daemon through `/var/run/docker.sock`. That is Docker-outside-of-
@@ -138,3 +147,66 @@ results/<slug>/bs<N>/<dataset>/<model_id>/metadata_*.json
 results/raw_values.csv
 results/component_breakdown.csv
 ```
+
+## Post-Run Validation
+
+After a sweep finishes, validate estimator behavior from the saved artifacts
+without rerunning SGLang or any dataset:
+
+```bash
+python validate_estimator.py results
+```
+
+The validator reads `metadata_*.json` and `server_records_*.jsonl`, recomputes
+component-wise estimates, compares them with MoE-CAP-compatible estimates where
+the architecture supports it, and writes:
+
+```text
+results/validation/estimator_comparison.csv
+results/validation/validation_summary.json
+```
+
+For lightweight DCGM or `nvidia-smi` validation, collect a small aggregate CSV
+per run/phase and pass it in:
+
+```bash
+python validate_estimator.py results --telemetry-summary telemetry_summary.csv
+```
+
+Expected telemetry columns are `slug,batch_size,dataset,phase` plus one compute
+utilization column and one memory utilization column. Supported names include:
+
+```text
+gpu_util_pct, sm_util_pct, sm_active_pct, DCGM_FI_PROF_SM_ACTIVE, sm
+memory_util_pct, mem_util_pct, dram_util_pct, DCGM_FI_PROF_DRAM_ACTIVE, mem
+```
+
+The output is:
+
+```text
+results/validation/telemetry_comparison.csv
+```
+
+This is a coarse validation layer. It is useful for trend and magnitude checks,
+but it is not expected to equal estimator S-MFU/S-MBU exactly because it includes
+runtime stalls, scheduling gaps, communication, CUDA graph behavior, and kernel
+implementation details.
+
+To compare against Nsight or other profiler measurements, provide a profiler
+summary CSV:
+
+```bash
+python validate_estimator.py results --profiler-summary profiler_summary.csv
+```
+
+Expected profiler columns are `slug,batch_size,dataset,phase,profiled_smfu,profiled_smbu`.
+Use `--sample-limit N` for sampled checks, especially when validating long
+mini-SWE-agent runs.
+
+Workload configs use `num_samples` for request count, except mini-SWE-agent,
+where `metric_sample_steps` is the required number of usable probe records.
+`prefix_cache: true` retains SGLang radix caching for agentic tool loops;
+chat, reasoning, and batched-prefill configs disable it so each request is
+measured independently. ShareGPT can set `max_input_tokens`; sBench applies
+the model chat template and truncates oldest turns at an exact token boundary.
+MMLU-Pro refuses an overlong prompt instead of truncating away the question.

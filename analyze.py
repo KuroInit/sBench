@@ -22,7 +22,7 @@ def main() -> None:
         raise SystemExit(1)
     results_dir = Path(sys.argv[1])
     sweep_config = _load_sweep_config()
-    estimator_mode = _estimator_mode(sweep_config)
+    default_estimator_mode = _estimator_mode(sweep_config)
     rows = []
     breakdown_rows = []
     for leaf in _leaf_dirs(results_dir):
@@ -37,6 +37,7 @@ def main() -> None:
                 rows.append(_failure_row(failure))
             continue
         meta = json.loads(meta_path.read_text())
+        estimator_mode = _estimator_mode_from_metadata(meta, default_estimator_mode)
         if "dataset_config" not in meta:
             dataset_for_cfg = _parts(results_dir, leaf)[0]
             recovered_cfg = _load_effective_dataset_config(leaf, dataset_for_cfg)
@@ -58,6 +59,10 @@ def main() -> None:
             filtered_records = filtered_records[:sample_limit]
         if not filtered_records:
             rows.append(_synthetic_failure_row(leaf, results_dir, "no usable probe records"))
+            continue
+        missing_modes = _missing_metric_modes(filtered_records) if meta.get("dataset_config") else []
+        if missing_modes:
+            rows.append(_synthetic_failure_row(leaf, results_dir, f"metric sample is missing required forward mode(s): {', '.join(missing_modes)}"))
             continue
         model = meta["model_config"]["model_name"]
         precision = meta["model_config"].get("precision", "bfloat16")
@@ -133,6 +138,13 @@ def _estimator_mode(config: dict[str, Any]) -> str:
         raise SystemExit(f"unsupported estimator_mode={mode!r}; expected component-wise or moe-cap")
     return mode
 
+
+def _estimator_mode_from_metadata(meta: dict[str, Any], default: str) -> str:
+    value = meta.get("estimator_mode")
+    if value is None:
+        return default
+    return _estimator_mode({"estimator_mode": value})
+
 def _leaf_dirs(root: Path):
     if not root.exists():
         return []
@@ -161,6 +173,11 @@ def _metric_sample_limit(meta: dict[str, Any], dataset: str) -> int | None:
         return None
     limit = int(value)
     return limit if limit > 0 else None
+
+
+def _missing_metric_modes(records: list[dict[str, Any]]) -> list[str]:
+    present = {str(record.get("forward_mode")) for record in records}
+    return sorted({"prefill", "decode"} - present)
 
 def _latest(path: Path, pattern: str) -> Path | None:
     matches = sorted(path.glob(pattern))
