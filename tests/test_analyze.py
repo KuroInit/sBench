@@ -150,6 +150,14 @@ def test_mini_swe_metric_sample_steps_overrides_num_samples():
     assert analyze._metric_sample_limit(meta, "mini_swe_agent") == 64
 
 
+def test_prefill_analysis_requires_only_prefill_phase():
+    import analyze
+
+    records = [{"forward_mode": "prefill"}]
+    meta = {"dataset_config": {"benchmark_type": "prefill"}}
+    assert analyze._missing_metric_modes(records, meta, "batched_prefill") == []
+    assert analyze._missing_metric_modes(records, {"dataset_config": {"benchmark_type": "chat"}}, "sharegpt") == ["decode"]
+
 
 def test_write_plots_chunks_combined_smfu_smbu_images(tmp_path):
     import analyze

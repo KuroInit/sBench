@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from sbench_probe.sglang_probe import build_probe_record
+from sbench_probe.sglang_probe import append_probe_error, build_probe_record
 
 
 class Mode:
@@ -94,3 +94,10 @@ def test_probe_ignores_empty_stat_recorder_buffer_slots():
     output = SimpleNamespace(routed_experts_output={"logical_count": logical_count})
     record = build_probe_record(runner, batch, output, 0.2)
     assert record.expert_activation == 4.0
+
+
+def test_probe_error_writes_sidecar_log(tmp_path):
+    path = tmp_path / "server_records.jsonl"
+    append_probe_error(str(path), RuntimeError("probe broke"))
+    error_path = tmp_path / "server_records.jsonl.errors.log"
+    assert "RuntimeError: probe broke" in error_path.read_text()

@@ -171,6 +171,8 @@ def _apply_chat_token_limit(requests: list[BenchmarkRequest], config: dict[str, 
             capped.append(request)
             continue
         messages = _trim_messages_to_token_limit(tokenizer, request.messages, max_tokens)
+        if not messages:
+            continue
         token_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
         if hasattr(token_ids, "tolist"):
             token_ids = token_ids.tolist()
@@ -185,15 +187,48 @@ def _apply_chat_token_limit(requests: list[BenchmarkRequest], config: dict[str, 
 
 
 def _trim_messages_to_token_limit(tokenizer: Any, messages: list[dict[str, str]], max_tokens: int) -> list[dict[str, str]]:
-    """Discard oldest turns first, retaining the newest user request."""
+    """Discard oldest turns first while preserving a valid chat-template shape."""
 
-    trimmed = list(messages)
+    trimmed = _normalize_chat_messages(messages)
     while len(trimmed) > 1:
         token_ids = tokenizer.apply_chat_template(trimmed, tokenize=True, add_generation_prompt=True)
         if len(token_ids) <= max_tokens:
             return trimmed
-        trimmed = trimmed[1:]
+        trimmed = _drop_oldest_turn(trimmed)
     return trimmed
+
+
+def _drop_oldest_turn(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not messages:
+        return []
+    drop = 2 if len(messages) > 1 and messages[1].get("role") == "assistant" else 1
+    return _normalize_chat_messages(messages[drop:])
+
+
+def _normalize_chat_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for message in messages:
+        role = str(message.get("role", ""))
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(message.get("content", ""))
+        if not content:
+            continue
+        if not normalized:
+            if role != "user":
+                continue
+            normalized.append({"role": role, "content": content})
+            continue
+        if normalized[-1]["role"] == role:
+            if role == "user":
+                normalized[-1] = {"role": role, "content": normalized[-1]["content"] + "\n" + content}
+            else:
+                normalized[-1] = {"role": role, "content": content}
+            continue
+        normalized.append({"role": role, "content": content})
+    while normalized and normalized[-1]["role"] != "user":
+        normalized.pop()
+    return normalized
 
 
 def _apply_prompt_token_limit(requests: list[BenchmarkRequest], config: dict[str, Any]) -> list[BenchmarkRequest]:

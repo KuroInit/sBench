@@ -60,7 +60,7 @@ def main() -> None:
         if not filtered_records:
             rows.append(_synthetic_failure_row(leaf, results_dir, "no usable probe records"))
             continue
-        missing_modes = _missing_metric_modes(filtered_records) if meta.get("dataset_config") else []
+        missing_modes = _missing_metric_modes(filtered_records, meta, dataset) if meta.get("dataset_config") else []
         if missing_modes:
             rows.append(_synthetic_failure_row(leaf, results_dir, f"metric sample is missing required forward mode(s): {', '.join(missing_modes)}"))
             continue
@@ -175,9 +175,16 @@ def _metric_sample_limit(meta: dict[str, Any], dataset: str) -> int | None:
     return limit if limit > 0 else None
 
 
-def _missing_metric_modes(records: list[dict[str, Any]]) -> list[str]:
+def _missing_metric_modes(records: list[dict[str, Any]], meta: dict[str, Any], dataset: str) -> list[str]:
     present = {str(record.get("forward_mode")) for record in records}
-    return sorted({"prefill", "decode"} - present)
+    return sorted(_required_metric_modes(meta, dataset) - present)
+
+
+def _required_metric_modes(meta: dict[str, Any], dataset: str) -> set[str]:
+    cfg = meta.get("dataset_config", {}) or {}
+    if cfg.get("benchmark_type") == "prefill" or dataset == "batched_prefill":
+        return {"prefill"}
+    return {"prefill", "decode"}
 
 def _latest(path: Path, pattern: str) -> Path | None:
     matches = sorted(path.glob(pattern))

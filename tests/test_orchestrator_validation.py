@@ -15,6 +15,7 @@ from orchestrator import (
     load_required_hf_config,
     merged_sglang_server_flags,
     model_precision,
+    required_forward_modes,
     run_signature,
     required_probe_records,
     start_sglang,
@@ -82,6 +83,11 @@ def test_probe_file_requires_prefill_and_decode_when_requested(tmp_path):
     ok, error = validate_probe_file(path, required_forward_modes={"prefill", "decode"})
     assert not ok
     assert "decode" in error
+
+
+def test_prefill_workload_requires_only_prefill_probe_phase():
+    assert required_forward_modes({"benchmark_type": "prefill", "target_output_tokens": 1}) == {"prefill"}
+    assert required_forward_modes({"benchmark_type": "chat", "target_output_tokens": 1}) == {"prefill", "decode"}
 
 
 def test_checkpoint_signature_prevents_stale_skip(tmp_path):

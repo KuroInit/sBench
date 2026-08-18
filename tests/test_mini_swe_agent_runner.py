@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from sbench.mini_swe_agent_runner import build_mini_swe_agent_command, configure_openai_env, mini_swe_outputs_exist, run_mini_swe_agent, validate_mini_swe_predictions
+from sbench.mini_swe_agent_runner import build_mini_swe_agent_command, configure_openai_env, expected_prediction_count, mini_swe_outputs_exist, run_mini_swe_agent, validate_mini_swe_predictions
 
 
 def test_builds_docker_command_with_default_openai_model(tmp_path):
@@ -44,6 +44,17 @@ def test_issue_count_becomes_a_single_issue_slice(tmp_path):
     assert command[command.index("--slice") + 1] == "0:1"
 
 
+def test_explicit_slice_arg_prevents_duplicate_issue_count_slice(tmp_path):
+    command = build_mini_swe_agent_command(
+        model_id="Qwen/Test",
+        batch_size=1,
+        dataset_cfg={"environment_class": "singularity", "issue_count": 1, "extra_args": ["--slice=0:8"]},
+        output_dir=tmp_path,
+    )
+    assert "--slice=0:8" in command
+    assert "--slice" not in command
+
+
 def test_rejects_unknown_environment_class(tmp_path):
     with pytest.raises(ValueError, match="environment_class"):
         build_mini_swe_agent_command(model_id="Qwen/Test", batch_size=1, dataset_cfg={"environment_class": "podman"}, output_dir=tmp_path)
@@ -56,6 +67,25 @@ def test_configure_openai_env_points_at_local_sglang():
     assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:30000/v1"
     assert env["OPENAI_API_KEY"] == "EMPTY"
     assert env["SBENCH_MINI_MODEL"] == "openai/Qwen/Test"
+    assert env["MSWEA_COST_TRACKING"] == "ignore_errors"
+
+
+def test_configure_openai_env_allows_cost_tracking_override():
+    env = {}
+    configure_openai_env(env, "http://127.0.0.1:30000", "Qwen/Test", {"cost_tracking": "enabled"})
+    assert env["MSWEA_COST_TRACKING"] == "enabled"
+
+
+def test_configure_openai_env_overrides_inherited_cost_tracking():
+    env = {"MSWEA_COST_TRACKING": "bad-inherited-value"}
+    configure_openai_env(env, "http://127.0.0.1:30000", "Qwen/Test", {})
+    assert env["MSWEA_COST_TRACKING"] == "ignore_errors"
+
+
+def test_expected_prediction_count_honors_slice_extra_args():
+    assert expected_prediction_count({"extra_args": ["--slice", "0:8"]}) == 8
+    assert expected_prediction_count({"extra_args": ["--slice=23"]}) == 1
+    assert expected_prediction_count({"issue_count": 3}) == 3
 
 
 def test_mini_swe_output_validation_requires_valid_submission(tmp_path):

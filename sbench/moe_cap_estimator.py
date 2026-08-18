@@ -154,6 +154,8 @@ def _qwen35_qwen36_hybrid_moe_cost(
         + constants["hybrid_attention_size_total"]
         + kv_size
     )
+    # Compatibility mode preserves the MoE-CAP-style one-expert FLOP term.
+    # Use component-wise mode when estimating actual routed top-k expert FLOPs.
     flops_units = (
         constants["moe_layers"] * (constants["expert_size"] + constants["shared_experts_size_total"])
         + constants["hybrid_attention_size_total"]
@@ -180,6 +182,8 @@ def _qwen3_moe_cost(
         + constants["layers"] * constants["attention_size_per_token"]
         + kv_size
     )
+    # Compatibility mode preserves the MoE-CAP-style one-expert FLOP term.
+    # Use component-wise mode when estimating actual routed top-k expert FLOPs.
     flops_units = (
         constants["moe_layers"] * constants["expert_size"]
         + constants["dense_layers"] * constants["dense_ffn_size"]

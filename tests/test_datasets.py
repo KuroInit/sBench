@@ -55,3 +55,29 @@ def test_sharegpt_context_cap_uses_model_chat_template(tmp_path, monkeypatch):
     request = load_sharegpt({"model_id": "Qwen/Test", "max_input_tokens": 3}, limit=1)[0]
     assert request.messages is None
     assert request.input_ids == [1, 2, 3]
+
+
+def test_sharegpt_context_trim_preserves_user_first_role_order(tmp_path, monkeypatch):
+    seen_roles = []
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **_kwargs):
+            roles = [item["role"] for item in messages]
+            assert roles[0] == "user"
+            assert roles[-1] == "user"
+            for left, right in zip(roles, roles[1:]):
+                assert left != right
+            seen_roles.append(roles)
+            return list(range(sum(len(item["content"].split()) for item in messages) + 1))
+
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *_args, **_kwargs: Tokenizer())
+    path = tmp_path / "sharegpt.json"
+    path.write_text(json.dumps([{"conversations": [
+        {"from": "human", "value": "old question words"},
+        {"from": "gpt", "value": "old answer words"},
+        {"from": "human", "value": "latest question words"},
+    ]}]))
+    monkeypatch.setenv("S_MFU_SHAREGPT_PATH", str(path))
+    request = load_sharegpt({"model_id": "Qwen/Test", "max_input_tokens": 4}, limit=1)[0]
+    assert request.input_ids == [0, 1, 2, 3]
+    assert seen_roles[-1] == ["user"]

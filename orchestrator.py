@@ -117,7 +117,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             ok, error = validate_probe_file(
                 probe_path,
                 minimum_usable_records=required_probe_records(dataset_cfg),
-                required_forward_modes={"prefill", "decode"},
+                required_forward_modes=required_forward_modes(dataset_cfg),
             )
             if not ok:
                 write_failure(leaf_dir, dataset, model, int(bs), error)
@@ -426,6 +426,14 @@ def required_probe_records(cfg: dict[str, Any]) -> int | None:
         return None
     required = int(value)
     return required if required > 0 else None
+
+
+def required_forward_modes(cfg: dict[str, Any]) -> set[str]:
+    """Return the forward phases required for a valid workload trace."""
+
+    if cfg.get("benchmark_type") == "prefill":
+        return {"prefill"}
+    return {"prefill", "decode"}
 
 
 def validate_probe_file(

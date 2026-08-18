@@ -44,8 +44,8 @@ def install_probe(output_path: str | None = None, profiling_only: bool | None = 
             record = build_probe_record(self, forward_batch, output, latency, profiling_only=explicit_profiling)
             if record is not None and _is_rank0(self):
                 append_record(path, record)
-        except Exception:
-            pass
+        except Exception as exc:
+            append_probe_error(path, exc)
         return output
 
     probed_forward._sbench_probe = True
@@ -87,6 +87,16 @@ def append_record(path: str, record: ProbeRecord) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with dest.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record.to_dict()) + "\n")
+
+
+def append_probe_error(path: str, exc: Exception) -> None:
+    try:
+        dest = Path(path).with_suffix(Path(path).suffix + ".errors.log")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("a", encoding="utf-8") as handle:
+            handle.write(f"{type(exc).__name__}: {exc}\n")
+    except Exception:
+        pass
 
 
 def _sync_and_time() -> float:

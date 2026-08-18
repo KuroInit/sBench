@@ -127,7 +127,7 @@ def build_mini_swe_agent_command(
         for instance_id in instance_ids:
             command += ["-i", str(instance_id)]
     extra_args = dataset_cfg.get("extra_args") or []
-    if dataset_cfg.get("issue_count") is not None and not instance_ids and "--slice" not in extra_args:
+    if dataset_cfg.get("issue_count") is not None and not instance_ids and slice_from_extra_args(extra_args) is None:
         command.extend(["--slice", f"0:{int(dataset_cfg['issue_count'])}"])
     if extra_args:
         command.extend(str(arg) for arg in extra_args)
@@ -139,6 +139,7 @@ def configure_openai_env(env: dict[str, str], api_base: str, model_id: str, data
     env["OPENAI_BASE_URL"] = env["OPENAI_API_BASE"]
     env.setdefault("OPENAI_API_KEY", str(dataset_cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or "EMPTY"))
     env.setdefault("SBENCH_MINI_MODEL", str(dataset_cfg.get("mini_model_name") or f"openai/{model_id}"))
+    env["MSWEA_COST_TRACKING"] = str(dataset_cfg.get("cost_tracking") or "ignore_errors")
 
 
 def mini_swe_outputs_exist(output_dir: Path, dataset_cfg: dict[str, Any]) -> bool:
@@ -166,7 +167,7 @@ def validate_mini_swe_predictions(output_dir: Path, dataset_cfg: dict[str, Any])
         return "mini-SWE-agent predictions file is empty"
 
     expected_ids = {str(value) for value in dataset_cfg.get("instance_ids") or []}
-    expected_count = len(expected_ids) if expected_ids else int(dataset_cfg.get("issue_count", 1))
+    expected_count = expected_prediction_count(dataset_cfg)
     if len(payload) != expected_count:
         return f"mini-SWE-agent produced {len(payload)} prediction(s); expected {expected_count}"
     if expected_ids and set(map(str, payload)) != expected_ids:
@@ -179,6 +180,39 @@ def validate_mini_swe_predictions(output_dir: Path, dataset_cfg: dict[str, Any])
         if not str(prediction.get("model_patch", "")).strip():
             return f"prediction for {instance_id!r} has no model_patch submission"
     return ""
+
+
+def expected_prediction_count(dataset_cfg: dict[str, Any]) -> int:
+    expected_ids = dataset_cfg.get("instance_ids") or []
+    if expected_ids:
+        return len(expected_ids)
+    slice_value = slice_from_extra_args(dataset_cfg.get("extra_args") or [])
+    if slice_value:
+        count = count_from_slice(slice_value)
+        if count is not None:
+            return count
+    return int(dataset_cfg.get("issue_count", 1))
+
+
+def slice_from_extra_args(extra_args: list[Any]) -> str | None:
+    args = [str(arg) for arg in extra_args]
+    for idx, arg in enumerate(args):
+        if arg == "--slice" and idx + 1 < len(args):
+            return args[idx + 1]
+        if arg.startswith("--slice="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def count_from_slice(value: str) -> int | None:
+    if ":" not in value:
+        return 1
+    start_text, stop_text = value.split(":", 1)
+    if not stop_text:
+        return None
+    start = int(start_text) if start_text else 0
+    stop = int(stop_text)
+    return max(stop - start, 0)
 
 
 def _prediction_path(output_dir: Path, dataset_cfg: dict[str, Any]) -> Path | None:
