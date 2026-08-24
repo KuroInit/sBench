@@ -5,6 +5,7 @@ benchmark_types:
   reasoning: [mmlu_pro]
   agentic: [mini_swe_agent]
 port: 30000
+server_startup_timeout_seconds: 3600
 estimator_mode: component-wise
 
 # SGLang options:

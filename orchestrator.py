@@ -35,6 +35,7 @@ def main() -> None:
 
 def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
     port = int(config.get("port", 30000))
+    startup_timeout = server_startup_timeout(config)
     estimator_mode = _estimator_mode(config)
     plan = sweep_plan(config)
     model_configs, config_errors = load_model_configs(config.get("models", []))
@@ -79,7 +80,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             sglang_server_flags=server_flags,
         )
         try:
-            if not wait_health(port, proc):
+            if not wait_health(port, proc, timeout=startup_timeout):
                 error = f"SGLang failed to start, code={proc.poll()}"
                 write_failure(leaf_dir, dataset, model, int(bs), error)
                 checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
@@ -284,6 +285,13 @@ def wait_health(port: int, proc: subprocess.Popen, timeout: int = 1500) -> bool:
         except Exception:
             time.sleep(2)
     return False
+
+
+def server_startup_timeout(config: dict[str, Any]) -> int:
+    timeout = int(config.get("server_startup_timeout_seconds", 1500))
+    if timeout <= 0:
+        raise SystemExit("server_startup_timeout_seconds must be positive")
+    return timeout
 
 
 def stop_process(proc: subprocess.Popen) -> None:

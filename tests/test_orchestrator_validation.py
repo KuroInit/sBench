@@ -17,6 +17,7 @@ from orchestrator import (
     model_precision,
     required_forward_modes,
     run_signature,
+    server_startup_timeout,
     required_probe_records,
     start_sglang,
     sweep_plan,
@@ -44,6 +45,13 @@ def test_request_success_rate_can_be_relaxed():
     ]
     ok, _ = validate_request_results(results, {"min_success_rate": 0.5})
     assert ok
+
+
+def test_server_startup_timeout_is_configurable():
+    assert server_startup_timeout({}) == 1500
+    assert server_startup_timeout({"server_startup_timeout_seconds": 3600}) == 3600
+    with pytest.raises(SystemExit, match="must be positive"):
+        server_startup_timeout({"server_startup_timeout_seconds": 0})
 
 
 def test_probe_file_must_be_valid_jsonl(tmp_path):
