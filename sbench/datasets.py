@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -22,6 +22,7 @@ class BenchmarkRequest:
     input_ids: list[int] | None = None
     output_len: int = 1
     uid: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def load_dataset(dataset: str, config: dict[str, Any], limit: int | None = None) -> list[BenchmarkRequest]:
@@ -136,8 +137,72 @@ def load_mmlu_pro(config: dict[str, Any], limit: int | None = None) -> list[Benc
                 "\n\nSolve the problem carefully. Explain your reasoning briefly, then end with "
                 "'Answer: <letter>' where <letter> is the selected option."
             )
-        requests.append(BenchmarkRequest(prompt=prompt, output_len=int(config.get("target_output_tokens", 16)), uid=f"mmlu-{idx}"))
+        metadata = {
+            "dataset": "mmlu_pro",
+            "question": str(question),
+            "choices": choices if isinstance(choices, list) else [],
+            "gold_answer": _mmlu_gold_answer(row, choices if isinstance(choices, list) else []),
+        }
+        if config.get("save_prompt", True):
+            metadata["prompt"] = prompt
+        for key in ("subject", "category", "src", "cot_content"):
+            if row.get(key) is not None:
+                metadata[key] = row.get(key)
+        requests.append(
+            BenchmarkRequest(
+                prompt=prompt,
+                output_len=int(config.get("target_output_tokens", 16)),
+                uid=f"mmlu-{idx}",
+                metadata=metadata,
+            )
+        )
     return _apply_prompt_token_limit(requests, config)
+
+
+def _mmlu_gold_answer(row: dict[str, Any], choices: list[Any]) -> str | None:
+    for key in ("answer", "target", "label", "correct_answer"):
+        value = row.get(key)
+        if value is None:
+            continue
+        mapped = _answer_from_choice_text(value, choices)
+        if mapped:
+            return mapped
+        parsed = _normalize_answer_letter(value)
+        if parsed:
+            return parsed
+    for key in ("answer_index", "answer_idx", "target_index", "label_index"):
+        value = row.get(key)
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if index >= 0:
+            return chr(65 + index)
+    return None
+
+
+def _answer_from_choice_text(value: Any, choices: list[Any]) -> str | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    for index, choice in enumerate(choices):
+        if str(choice).strip() == text:
+            return chr(65 + index)
+    return None
+
+
+def _normalize_answer_letter(value: Any) -> str | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        index = int(text)
+        if 0 <= index < 26:
+            return chr(65 + index)
+    first = text[0].upper()
+    if "A" <= first <= "Z":
+        return first
+    return None
 
 
 def _apply_chat_token_limit(requests: list[BenchmarkRequest], config: dict[str, Any]) -> list[BenchmarkRequest]:
@@ -181,6 +246,7 @@ def _apply_chat_token_limit(requests: list[BenchmarkRequest], config: dict[str, 
                 input_ids=[int(token) for token in token_ids[-max_tokens:]],
                 output_len=request.output_len,
                 uid=request.uid,
+                metadata=request.metadata,
             )
         )
     return capped
@@ -266,6 +332,7 @@ def _apply_prompt_token_limit(requests: list[BenchmarkRequest], config: dict[str
                 input_ids=[int(token) for token in token_ids],
                 output_len=request.output_len,
                 uid=request.uid,
+                metadata=request.metadata,
             )
         )
     return capped

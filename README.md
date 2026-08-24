@@ -116,12 +116,18 @@ split: dev
 workers: 1
 environment_class: docker      # or singularity
 issue_count: 1
+mini_swe_config: swebench_xml
 ```
 
 The orchestrator starts the local SGLang server, points mini-SWE-agent at
 `http://127.0.0.1:<port>/v1`, and preserves the lightweight probe records for
 S-MFU/S-MBU analysis. Install mini-SWE-agent separately with the Docker or
 Singularity/Apptainer setup required by your machine.
+
+mini-SWE-agent v2 uses native tool calls by default. Local SGLang-served models
+can emit textual tool-call blocks instead of native OpenAI `tool_calls`; set
+`mini_swe_config: swebench_xml` or a custom `mini_swe_configs` list
+to load mini-SWE's text-based parser configs.
 
 Batch-mode mini-SWE-agent writes `preds.json`. sBench requires one nonempty
 `model_patch` submission per selected issue before accepting the run. This

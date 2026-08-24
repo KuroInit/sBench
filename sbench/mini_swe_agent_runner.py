@@ -122,6 +122,8 @@ def build_mini_swe_agent_command(
         str(dataset_cfg.get("output_flag", "--output")),
         str(output_dir),
     ]
+    for config_name in mini_swe_config_args(dataset_cfg):
+        command.extend(["-c", config_name])
     instance_ids = dataset_cfg.get("instance_ids")
     if instance_ids:
         for instance_id in instance_ids:
@@ -132,6 +134,22 @@ def build_mini_swe_agent_command(
     if extra_args:
         command.extend(str(arg) for arg in extra_args)
     return command
+
+
+def mini_swe_config_args(dataset_cfg: dict[str, Any]) -> list[str]:
+    """Return mini-SWE config files to load via repeated ``-c`` flags."""
+
+    values = []
+    single = dataset_cfg.get("mini_swe_config")
+    multiple = dataset_cfg.get("mini_swe_configs")
+    if single:
+        values.append(single)
+    if multiple:
+        if isinstance(multiple, (str, os.PathLike)):
+            values.append(multiple)
+        else:
+            values.extend(multiple)
+    return [str(value) for value in values if str(value).strip()]
 
 
 def configure_openai_env(env: dict[str, str], api_base: str, model_id: str, dataset_cfg: dict[str, Any]) -> None:

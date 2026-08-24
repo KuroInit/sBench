@@ -4,7 +4,7 @@ from urllib.error import HTTPError
 
 from sbench.datasets import BenchmarkRequest
 from sbench import runner
-from sbench.runner import _format_request_error, _request_endpoint
+from sbench.runner import _format_request_error, _request_endpoint, parse_answer_letter
 
 
 def test_input_ids_use_sglang_generate_endpoint():
@@ -57,3 +57,37 @@ def test_input_id_request_payload_uses_native_sglang_generate(monkeypatch):
     assert captured["url"] == "http://127.0.0.1:30000/generate"
     assert captured["payload"]["input_ids"] == [1, 2, 3]
     assert captured["payload"]["sampling_params"] == {"temperature": 0, "max_new_tokens": 4, "ignore_eos": True}
+
+
+def test_response_capture_parses_answer_and_correctness(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"text": "Reasoning here. Answer: C"}], "usage": {"completion_tokens": 6}}).encode()
+
+    monkeypatch.setattr(runner.urlrequest, "urlopen", lambda *_args, **_kwargs: Response())
+    result = runner._send_request(
+        "http://127.0.0.1:30000",
+        "Qwen/Test",
+        BenchmarkRequest(prompt="question", output_len=16, metadata={"gold_answer": "C"}),
+        False,
+        save_responses=True,
+        parse_answers=True,
+    )
+    assert result.success
+    assert result.completion == "Reasoning here. Answer: C"
+    assert result.parsed_answer == "C"
+    assert result.gold_answer == "C"
+    assert result.correct is True
+    assert result.metadata == {"gold_answer": "C"}
+
+
+def test_parse_answer_letter_handles_common_reasoning_forms():
+    assert parse_answer_letter("The answer is (D).") == "D"
+    assert parse_answer_letter("Final answer: b") == "B"
+    assert parse_answer_letter("C") == "C"

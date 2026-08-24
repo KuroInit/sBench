@@ -5,6 +5,8 @@ max_input_tokens: 2048
 target_output_tokens: 256
 num_samples: 200
 min_success_rate: 1.0
+save_responses: true
+parse_answers: true
 prefix_cache: false
 precision: bfloat16
 hf_dataset: TIGER-Lab/MMLU-Pro

@@ -23,11 +23,21 @@ def test_azure_loader_accepts_string_token_ids(tmp_path, monkeypatch):
 
 def test_mmlu_reasoning_mode_requests_explanation(tmp_path, monkeypatch):
     path = tmp_path / "mmlu.jsonl"
-    path.write_text(json.dumps({"question": "2 + 2?", "options": ["3", "4"]}) + "\n")
+    path.write_text(json.dumps({"question": "2 + 2?", "options": ["3", "4"], "answer": "B"}) + "\n")
     monkeypatch.setenv("S_MFU_MMLU_PRO_PATH", str(path))
     request = load_mmlu_pro({"answer_mode": "reasoning", "target_output_tokens": 256}, limit=1)[0]
     assert "Explain your reasoning" in request.prompt
     assert request.output_len == 256
+    assert request.metadata["gold_answer"] == "B"
+    assert request.metadata["choices"] == ["3", "4"]
+
+
+def test_mmlu_gold_answer_can_be_choice_text(tmp_path, monkeypatch):
+    path = tmp_path / "mmlu.jsonl"
+    path.write_text(json.dumps({"question": "2 + 2?", "options": ["3", "4"], "answer": "4"}) + "\n")
+    monkeypatch.setenv("S_MFU_MMLU_PRO_PATH", str(path))
+    request = load_mmlu_pro({"answer_mode": "direct", "target_output_tokens": 16}, limit=1)[0]
+    assert request.metadata["gold_answer"] == "B"
 
 
 def test_mmlu_context_cap_rejects_semantically_destructive_truncation(tmp_path, monkeypatch):

@@ -106,7 +106,17 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                     checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
                     continue
                 use_chat = lane_for_dataset(config, dataset) == "chat"
-                results = asyncio.run(run_requests(f"http://127.0.0.1:{port}", model["id"], requests, int(bs), use_chat_api=use_chat))
+                results = asyncio.run(
+                    run_requests(
+                        f"http://127.0.0.1:{port}",
+                        model["id"],
+                        requests,
+                        int(bs),
+                        use_chat_api=use_chat,
+                        save_responses=bool(dataset_cfg.get("save_responses", False)),
+                        parse_answers=bool(dataset_cfg.get("parse_answers", False)),
+                    )
+                )
                 write_request_results(str(leaf_dir / f"detailed_results_{dataset}_{timestamp()}.jsonl"), results)
                 ok, error = validate_request_results(results, dataset_cfg)
                 if not ok:

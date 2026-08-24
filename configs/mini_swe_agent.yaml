@@ -14,12 +14,15 @@ prefix_cache: true
 require_output_artifacts: true
 predictions_file: preds.json
 timeout_seconds: 14400
+mini_swe_config: swebench_xml
 extra_args: ["--redo-existing"]
 
 # Optional:
 # binary: mini-extra
 # output_flag: --output
 # mini_model_name: openai/<served_model_name>
+# mini_swe_config: swebench_xml
+# mini_swe_configs: ["swebench.yaml", "custom_model.yaml"]
 # timeout_seconds: 14400
 # expected_output_globs: ["*.json", "*.jsonl", "preds*", "predictions*"]
 # instance_ids:

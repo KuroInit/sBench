@@ -2,7 +2,15 @@ from pathlib import Path
 
 import pytest
 
-from sbench.mini_swe_agent_runner import build_mini_swe_agent_command, configure_openai_env, expected_prediction_count, mini_swe_outputs_exist, run_mini_swe_agent, validate_mini_swe_predictions
+from sbench.mini_swe_agent_runner import (
+    build_mini_swe_agent_command,
+    configure_openai_env,
+    expected_prediction_count,
+    mini_swe_config_args,
+    mini_swe_outputs_exist,
+    run_mini_swe_agent,
+    validate_mini_swe_predictions,
+)
 
 
 def test_builds_docker_command_with_default_openai_model(tmp_path):
@@ -53,6 +61,47 @@ def test_explicit_slice_arg_prevents_duplicate_issue_count_slice(tmp_path):
     )
     assert "--slice=0:8" in command
     assert "--slice" not in command
+
+
+def test_adds_single_mini_swe_config_before_extra_args(tmp_path):
+    command = build_mini_swe_agent_command(
+        model_id="Qwen/Test",
+        batch_size=1,
+        dataset_cfg={
+            "environment_class": "singularity",
+            "mini_swe_config": "swebench_xml",
+            "extra_args": ["--redo-existing"],
+        },
+        output_dir=tmp_path,
+    )
+    config_idx = command.index("-c")
+    assert command[config_idx + 1] == "swebench_xml"
+    assert config_idx < command.index("--redo-existing")
+
+
+def test_adds_multiple_mini_swe_configs(tmp_path):
+    command = build_mini_swe_agent_command(
+        model_id="Qwen/Test",
+        batch_size=1,
+        dataset_cfg={
+            "environment_class": "singularity",
+            "mini_swe_configs": ["swebench.yaml", "local_textbased.yaml"],
+        },
+        output_dir=tmp_path,
+    )
+    assert [command[idx + 1] for idx, value in enumerate(command) if value == "-c"] == [
+        "swebench.yaml",
+        "local_textbased.yaml",
+    ]
+
+
+def test_mini_swe_config_args_accepts_single_and_multiple_values():
+    assert mini_swe_config_args({"mini_swe_config": "swebench_xml"}) == ["swebench_xml"]
+    assert mini_swe_config_args({"mini_swe_configs": "swebench_xml"}) == ["swebench_xml"]
+    assert mini_swe_config_args({"mini_swe_config": "base.yaml", "mini_swe_configs": ["override.yaml"]}) == [
+        "base.yaml",
+        "override.yaml",
+    ]
 
 
 def test_rejects_unknown_environment_class(tmp_path):
