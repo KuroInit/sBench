@@ -32,6 +32,16 @@ def test_mmlu_reasoning_mode_requests_explanation(tmp_path, monkeypatch):
     assert request.metadata["choices"] == ["3", "4"]
 
 
+def test_mmlu_direct_mode_requests_letter_only_answer(tmp_path, monkeypatch):
+    path = tmp_path / "mmlu.jsonl"
+    path.write_text(json.dumps({"question": "2 + 2?", "options": ["3", "4"], "answer": "B"}) + "\n")
+    monkeypatch.setenv("S_MFU_MMLU_PRO_PATH", str(path))
+    request = load_mmlu_pro({"answer_mode": "direct", "target_output_tokens": 16}, limit=1)[0]
+    assert "Answer with only the selected option letter." in request.prompt
+    assert "Explain your reasoning" not in request.prompt
+    assert request.output_len == 16
+
+
 def test_mmlu_gold_answer_can_be_choice_text(tmp_path, monkeypatch):
     path = tmp_path / "mmlu.jsonl"
     path.write_text(json.dumps({"question": "2 + 2?", "options": ["3", "4"], "answer": "4"}) + "\n")

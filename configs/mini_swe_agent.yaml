@@ -17,7 +17,10 @@ timeout_seconds: 14400
 model_class: litellm_textbased
 local_openai: true
 custom_llm_provider: openai
-mini_swe_configs: ["swebench.yaml", "swebench_xml"]
+mini_swe_configs:
+  - swebench.yaml
+  - swebench_xml
+  - 'environment.exec_args=["--contain","--cleanenv"]'
 extra_args: ["--redo-existing"]
 
 # Optional:
@@ -27,9 +30,11 @@ extra_args: ["--redo-existing"]
 # model_class: litellm_textbased
 # local_openai: true
 # custom_llm_provider: openai
-# mini_swe_configs: ["swebench.yaml", "swebench_xml"]
+# mini_swe_configs:
+#   - swebench.yaml
+#   - swebench_xml
+#   - 'environment.exec_args=["--contain","--cleanenv"]'
 # timeout_seconds: 14400
 # expected_output_globs: ["*.json", "*.jsonl", "preds*", "predictions*"]
 # instance_ids:
 #   - sympy__sympy-15599
-# extra_args: []

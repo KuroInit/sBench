@@ -117,7 +117,10 @@ workers: 1
 environment_class: docker      # or singularity
 issue_count: 1
 model_class: litellm_textbased
-mini_swe_configs: ["swebench.yaml", "swebench_xml"]
+mini_swe_configs:
+  - swebench.yaml
+  - swebench_xml
+  - 'environment.exec_args=["--contain","--cleanenv"]'
 ```
 
 The orchestrator starts the local SGLang server, points mini-SWE-agent at
@@ -129,6 +132,9 @@ mini-SWE-agent v2 uses native tool calls by default. Local SGLang-served models
 can emit textual action blocks instead of native OpenAI `tool_calls`; set
 `model_class: litellm_textbased` with `mini_swe_configs: ["swebench.yaml",
 "swebench_xml"]` or another matching text parser config.
+On clusters without Singularity fakeroot mappings, include the
+`environment.exec_args=["--contain","--cleanenv"]` override so task commands do
+not fail on `/etc/subuid`.
 
 Batch-mode mini-SWE-agent writes `preds.json`. sBench requires one nonempty
 `model_patch` submission per selected issue before accepting the run. This

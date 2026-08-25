@@ -137,6 +137,9 @@ def load_mmlu_pro(config: dict[str, Any], limit: int | None = None) -> list[Benc
                 "\n\nSolve the problem carefully. Explain your reasoning briefly, then end with "
                 "'Answer: <letter>' where <letter> is the selected option."
             )
+        else:
+            instruction = str(config.get("direct_answer_instruction") or "Answer with only the selected option letter.")
+            prompt += f"\n\n{instruction}"
         metadata = {
             "dataset": "mmlu_pro",
             "question": str(question),
