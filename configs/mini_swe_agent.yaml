@@ -14,15 +14,20 @@ prefix_cache: true
 require_output_artifacts: true
 predictions_file: preds.json
 timeout_seconds: 14400
-mini_swe_config: swebench_xml
+model_class: litellm_textbased
+local_openai: true
+custom_llm_provider: openai
+mini_swe_configs: ["swebench.yaml", "swebench_xml"]
 extra_args: ["--redo-existing"]
 
 # Optional:
 # binary: mini-extra
 # output_flag: --output
 # mini_model_name: openai/<served_model_name>
-# mini_swe_config: swebench_xml
-# mini_swe_configs: ["swebench.yaml", "custom_model.yaml"]
+# model_class: litellm_textbased
+# local_openai: true
+# custom_llm_provider: openai
+# mini_swe_configs: ["swebench.yaml", "swebench_xml"]
 # timeout_seconds: 14400
 # expected_output_globs: ["*.json", "*.jsonl", "preds*", "predictions*"]
 # instance_ids:

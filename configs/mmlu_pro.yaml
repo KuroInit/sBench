@@ -1,8 +1,8 @@
 benchmark_type: reasoning
 dataset_names: [mmlu_pro]
-answer_mode: reasoning
+answer_mode: direct
 max_input_tokens: 2048
-target_output_tokens: 256
+target_output_tokens: 32
 num_samples: 200
 min_success_rate: 1.0
 save_responses: true

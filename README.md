@@ -116,7 +116,8 @@ split: dev
 workers: 1
 environment_class: docker      # or singularity
 issue_count: 1
-mini_swe_config: swebench_xml
+model_class: litellm_textbased
+mini_swe_configs: ["swebench.yaml", "swebench_xml"]
 ```
 
 The orchestrator starts the local SGLang server, points mini-SWE-agent at
@@ -125,9 +126,9 @@ S-MFU/S-MBU analysis. Install mini-SWE-agent separately with the Docker or
 Singularity/Apptainer setup required by your machine.
 
 mini-SWE-agent v2 uses native tool calls by default. Local SGLang-served models
-can emit textual tool-call blocks instead of native OpenAI `tool_calls`; set
-`mini_swe_config: swebench_xml` or a custom `mini_swe_configs` list
-to load mini-SWE's text-based parser configs.
+can emit textual action blocks instead of native OpenAI `tool_calls`; set
+`model_class: litellm_textbased` with `mini_swe_configs: ["swebench.yaml",
+"swebench_xml"]` or another matching text parser config.
 
 Batch-mode mini-SWE-agent writes `preds.json`. sBench requires one nonempty
 `model_patch` submission per selected issue before accepting the run. This

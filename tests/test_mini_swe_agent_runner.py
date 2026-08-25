@@ -7,6 +7,7 @@ from sbench.mini_swe_agent_runner import (
     configure_openai_env,
     expected_prediction_count,
     mini_swe_config_args,
+    mini_swe_local_model_config_args,
     mini_swe_outputs_exist,
     run_mini_swe_agent,
     validate_mini_swe_predictions,
@@ -93,6 +94,31 @@ def test_adds_multiple_mini_swe_configs(tmp_path):
         "swebench.yaml",
         "local_textbased.yaml",
     ]
+
+
+def test_local_openai_configs_litellm_for_sglang(tmp_path):
+    command = build_mini_swe_agent_command(
+        model_id="Qwen/Test",
+        batch_size=1,
+        dataset_cfg={
+            "environment_class": "singularity",
+            "model_class": "litellm_textbased",
+            "mini_swe_configs": ["swebench.yaml", "swebench_xml"],
+        },
+        output_dir=tmp_path,
+        openai_api_base="http://127.0.0.1:30000/v1",
+    )
+    assert command[command.index("--model-class") + 1] == "litellm_textbased"
+    assert [command[idx + 1] for idx, value in enumerate(command) if value == "-c"] == [
+        "swebench.yaml",
+        "swebench_xml",
+        "model.model_kwargs.custom_llm_provider=openai",
+        "model.model_kwargs.api_base=http://127.0.0.1:30000/v1",
+    ]
+
+
+def test_local_openai_config_specs_can_be_disabled():
+    assert mini_swe_local_model_config_args({"local_openai": False}, "http://127.0.0.1:30000/v1") == []
 
 
 def test_mini_swe_config_args_accepts_single_and_multiple_values():

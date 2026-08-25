@@ -51,13 +51,15 @@ def run_mini_swe_agent(
     # failed retry be mistaken for a successful one.
     attempt_dir = output_dir / f"attempt_{time.time_ns()}"
     attempt_dir.mkdir(parents=True, exist_ok=False)
+    openai_api_base = resolved_openai_api_base(api_base, dataset_cfg)
+    configure_openai_env(mini_env, api_base, model_id, dataset_cfg)
     command = build_mini_swe_agent_command(
         model_id=model_id,
         batch_size=batch_size,
         dataset_cfg=dataset_cfg,
         output_dir=attempt_dir,
+        openai_api_base=openai_api_base,
     )
-    configure_openai_env(mini_env, api_base, model_id, dataset_cfg)
 
     stdout_path = attempt_dir / f"mini_swe_agent_stdout_{timestamp()}.log"
     stderr_path = attempt_dir / f"mini_swe_agent_stderr_{timestamp()}.log"
@@ -99,6 +101,7 @@ def build_mini_swe_agent_command(
     batch_size: int,
     dataset_cfg: dict[str, Any],
     output_dir: Path,
+    openai_api_base: str | None = None,
 ) -> list[str]:
     env_class = str(dataset_cfg.get("environment_class", "docker")).lower()
     if env_class not in SUPPORTED_ENVIRONMENT_CLASSES:
@@ -122,8 +125,13 @@ def build_mini_swe_agent_command(
         str(dataset_cfg.get("output_flag", "--output")),
         str(output_dir),
     ]
+    model_class = dataset_cfg.get("model_class")
+    if model_class:
+        command.extend(["--model-class", str(model_class)])
     for config_name in mini_swe_config_args(dataset_cfg):
         command.extend(["-c", config_name])
+    for config_spec in mini_swe_local_model_config_args(dataset_cfg, openai_api_base):
+        command.extend(["-c", config_spec])
     instance_ids = dataset_cfg.get("instance_ids")
     if instance_ids:
         for instance_id in instance_ids:
@@ -152,8 +160,24 @@ def mini_swe_config_args(dataset_cfg: dict[str, Any]) -> list[str]:
     return [str(value) for value in values if str(value).strip()]
 
 
+def mini_swe_local_model_config_args(dataset_cfg: dict[str, Any], openai_api_base: str | None) -> list[str]:
+    """Return mini-SWE config overrides for a local OpenAI-compatible server."""
+
+    if not bool(dataset_cfg.get("local_openai", True)) or not openai_api_base:
+        return []
+    provider = str(dataset_cfg.get("custom_llm_provider") or dataset_cfg.get("litellm_provider") or "openai")
+    return [
+        f"model.model_kwargs.custom_llm_provider={provider}",
+        f"model.model_kwargs.api_base={openai_api_base}",
+    ]
+
+
+def resolved_openai_api_base(api_base: str, dataset_cfg: dict[str, Any]) -> str:
+    return str(dataset_cfg.get("openai_api_base") or f"{api_base.rstrip('/')}/v1")
+
+
 def configure_openai_env(env: dict[str, str], api_base: str, model_id: str, dataset_cfg: dict[str, Any]) -> None:
-    env["OPENAI_API_BASE"] = str(dataset_cfg.get("openai_api_base") or f"{api_base.rstrip('/')}/v1")
+    env["OPENAI_API_BASE"] = resolved_openai_api_base(api_base, dataset_cfg)
     env["OPENAI_BASE_URL"] = env["OPENAI_API_BASE"]
     env.setdefault("OPENAI_API_KEY", str(dataset_cfg.get("openai_api_key") or os.environ.get("OPENAI_API_KEY") or "EMPTY"))
     env.setdefault("SBENCH_MINI_MODEL", str(dataset_cfg.get("mini_model_name") or f"openai/{model_id}"))
