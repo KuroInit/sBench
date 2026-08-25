@@ -106,7 +106,10 @@ models:
   - id: moonshotai/Moonlight-16B-A3B
     slug: moonlight_16b_a3b
     tp: 4
+    config_loader:
+      trust_remote_code: true
     sglang_server_flags:
+      - --trust-remote-code
       - --served-model-name: moonlight_16b_a3b
       - --dtype: bfloat16
       - --context-length: 8192
