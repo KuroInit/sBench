@@ -1,4 +1,4 @@
-batch_sizes: [2, 4]
+batch_sizes: [2, 4, 8, 16, 32, 64, 128]
 benchmark_types:
   prefill: []
   chat: []
@@ -8,21 +8,17 @@ port: 30000
 server_startup_timeout_seconds: 3600
 estimator_mode: component-wise
 
-# SGLang options:
-#   - --disable-custom-all-reduce
-#   - --disable-radix-cache
-#   - --context-length: 16384
-#   - --chunked-prefill-size: 16384
-#   - --max-prefill-tokens: 16384
-#   - --mem-fraction-static: 0.90
-#   - --dtype: bfloat16
-#   - --served-model-name: qwen3_30b
+# NSCC Singapore / Aspire2A defaults:
+# - scripts/nscc_env.sh sets SBENCH_GPU_TYPE/ANALYZE_GPU_TYPE to NVIDIA A100-SXM4-40GB.
+# - PBS currently requests 1 node with 4 GPUs, so both selected models use tp: 4.
+# - Keep model context and chunked prefill at 16K for comparable runs.
 sglang_server_flags:
   - --disable-custom-all-reduce
   - --disable-radix-cache
 
 models:
-  # Dense Qwen3 (GQA)
+  # Dense / non-MoE baseline (GQA). Component-wise estimation does not require
+  # routed expert capture for this model.
   - id: Qwen/Qwen3-8B
     slug: qwen3_8b
     tp: 4
@@ -31,29 +27,12 @@ models:
       - --dtype: bfloat16
       - --context-length: 16384
       - --chunked-prefill-size: 16384
+      - --max-prefill-tokens: 16384
       - --mem-fraction-static: 0.90
 
-  - id: Qwen/Qwen3-14B
-    slug: qwen3_14b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: qwen3_14b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
-
-  - id: Qwen/Qwen3-32B
-    slug: qwen3_32b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: qwen3_32b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
-
-  # Standard Qwen3 MoE. Supports component-wise and MoE-CAP compatibility modes.
+  # Regular MoE comparison target. The orchestrator auto-enables SGLang routed
+  # expert capture flags for MoE models so component-wise MoE bandwidth can use
+  # runtime expert activation when available.
   - id: Qwen/Qwen3-30B-A3B
     slug: qwen3_30b_a3b
     tp: 4
@@ -62,50 +41,5 @@ models:
       - --dtype: bfloat16
       - --context-length: 16384
       - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
-
-  # Qwen3.5/Qwen3.6 dense hybrid linear/full-attention models.
-  - id: Qwen/Qwen3.5-9B
-    slug: qwen3_5_9b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: qwen3_5_9b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
-
-  - id: Qwen/Qwen3.6-27B
-    slug: qwen3_6_27b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: qwen3_6_27b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
-
-  # Hybrid MoE. Supports component-wise and MoE-CAP compatibility modes.
-  - id: Qwen/Qwen3.6-35B-A3B
-    slug: qwen3_6_35b_a3b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: qwen3_6_35b_a3b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --mem-fraction-static: 0.90
-
-  # Moonshot MoE using DeepSeek-V3 MLA-style architecture.
-  - id: moonshotai/Moonlight-16B-A3B
-    slug: moonlight_16b_a3b
-    tp: 4
-    config_loader:
-      trust_remote_code: true
-    sglang_server_flags:
-      - --trust-remote-code
-      - --served-model-name: moonlight_16b_a3b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
+      - --max-prefill-tokens: 16384
       - --mem-fraction-static: 0.90
