@@ -16,14 +16,22 @@ from typing import Any
 from urllib.request import urlopen
 
 from sbench.datasets import load_dataset
+from sbench.descriptor import descriptor_from_config
 from sbench.mini_swe_agent_runner import run_mini_swe_agent
 from sbench.runner import run_requests, write_request_results
+from sbench.trace import required_forward_modes as trace_required_forward_modes
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = os.environ.get("RESULTS_DIR", "./results")
 SWEEP_CONFIG = os.environ.get("SWEEP_CONFIG", str(PROJECT_ROOT / "configs" / "sweep.yaml"))
 CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", os.path.join(RESULTS_DIR, "checkpoint.yaml"))
 SUPPORTED_LANES = {"prefill", "chat", "reasoning", "agentic"}
+EXPERT_RECORDING_FLAGS = {
+    "--enable-return-routed-experts",
+    "--expert-distribution-recorder-mode",
+    "--enable-expert-distribution-metrics",
+}
+DEFAULT_MOE_PROBE_FLAGS = ("--enable-return-routed-experts",)
 
 
 def main() -> None:
@@ -51,11 +59,19 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             continue
         model = dict(model, resolved_hf_config=resolved_config)
         slug = model["slug"]
-        base_server_flags = merged_sglang_server_flags(config, model)
+        base_server_flags = merged_sglang_server_flags(config, model, resolved_config)
         dataset_cfg = load_dataset_config(dataset, model, base_server_flags)
         server_flags = workload_sglang_server_flags(base_server_flags, dataset_cfg)
         model["resolved_sglang_server_flags"] = server_flags
-        signature = run_signature(model, int(bs), dataset, dataset_cfg, resolved_config, architecture_overrides=architecture_overrides(model, dataset_cfg))
+        signature = run_signature(
+            model,
+            int(bs),
+            dataset,
+            dataset_cfg,
+            resolved_config,
+            architecture_overrides=architecture_overrides(model, dataset_cfg),
+            sglang_server_flags=server_flags,
+        )
         if checkpoint.is_done(slug, int(bs), dataset, signature):
             print(f"[sweep] [{done}/{total}] skip {slug} bs={bs} {dataset}: done")
             continue
@@ -128,7 +144,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             ok, error = validate_probe_file(
                 probe_path,
                 minimum_usable_records=required_probe_records(dataset_cfg),
-                required_forward_modes=required_forward_modes(dataset_cfg),
+                required_forward_modes=required_forward_modes(dataset_cfg, dataset),
             )
             if not ok:
                 write_failure(leaf_dir, dataset, model, int(bs), error)
@@ -224,6 +240,7 @@ def start_sglang(
     *,
     sglang_server_flags: Any = None,
 ) -> subprocess.Popen:
+    flags = list(iter_sglang_server_flags(sglang_server_flags))
     cmd = [
         sys.executable,
         "-m",
@@ -233,11 +250,13 @@ def start_sglang(
         "--port",
         str(port),
         "--tp-size",
-        str(model.get("tp", 1)),
+        str(resolved_parallel_size(model, flags, "--tp-size", "tp")),
         "--max-running-requests",
         str(batch_size),
     ]
-    append_sglang_server_flags(cmd, sglang_server_flags)
+    if "--pp-size" not in {flag for flag, _ in flags} and int(model.get("pp", 1) or 1) != 1:
+        cmd.extend(["--pp-size", str(resolved_parallel_size(model, flags, "--pp-size", "pp"))])
+    append_sglang_server_flags(cmd, [(flag, value) for flag, value in flags if flag != "--tp-size"])
     return subprocess.Popen(cmd, env=env)
 
 
@@ -257,6 +276,8 @@ def iter_sglang_server_flags(flags: Any) -> list[tuple[str, Any]]:
         return [(flags, True)]
     if isinstance(flags, dict):
         return [(str(flag), value) for flag, value in flags.items()]
+    if isinstance(flags, tuple) and len(flags) == 2:
+        return [(str(flags[0]), flags[1])]
     if isinstance(flags, list):
         out: list[tuple[str, Any]] = []
         for item in flags:
@@ -271,6 +292,26 @@ def model_served_name(flags: Any) -> str | None:
         if flag == "--served-model-name" and value not in {None, False, True}:
             served_name = str(value)
     return served_name
+
+
+def resolved_parallel_size(model: dict[str, Any], flags: Any, flag_name: str, model_key: str) -> int:
+    value = model.get(model_key, 1)
+    for flag, flag_value in iter_sglang_server_flags(flags):
+        if flag == flag_name and flag_value not in {None, False, True}:
+            value = flag_value
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise SystemExit(f"{model_key} must be a positive integer")
+    if parsed <= 0:
+        raise SystemExit(f"{model_key} must be a positive integer")
+    return parsed
+
+
+def resolved_num_gpus(model: dict[str, Any], flags: Any) -> int:
+    tp = resolved_parallel_size(model, flags, "--tp-size", "tp")
+    pp = resolved_parallel_size(model, flags, "--pp-size", "pp")
+    return tp * pp
 
 
 def wait_health(port: int, proc: subprocess.Popen, timeout: int = 1500) -> bool:
@@ -446,12 +487,10 @@ def required_probe_records(cfg: dict[str, Any]) -> int | None:
     return required if required > 0 else None
 
 
-def required_forward_modes(cfg: dict[str, Any]) -> set[str]:
+def required_forward_modes(cfg: dict[str, Any], dataset: str | None = None) -> set[str]:
     """Return the forward phases required for a valid workload trace."""
 
-    if cfg.get("benchmark_type") == "prefill":
-        return {"prefill"}
-    return {"prefill", "decode"}
+    return trace_required_forward_modes(cfg, dataset)
 
 
 def validate_probe_file(
@@ -507,12 +546,14 @@ def run_signature(
     dataset_cfg: dict[str, Any],
     hf_config: dict[str, Any] | None = None,
     architecture_overrides: dict[str, Any] | None = None,
+    sglang_server_flags: Any = None,
 ) -> str:
     sweep_cfg = load_yaml(SWEEP_CONFIG)
     payload = {
         "model_id": model.get("id"),
         "slug": model.get("slug"),
         "tp": model.get("tp", 1),
+        "pp": resolved_parallel_size(model, sglang_server_flags, "--pp-size", "pp"),
         "batch_size": batch_size,
         "dataset": dataset,
         "dataset_cfg": dataset_cfg,
@@ -520,7 +561,7 @@ def run_signature(
         "architecture_overrides": architecture_overrides if architecture_overrides is not None else architecture_overrides_for_signature(model, dataset_cfg),
         "probe_schema": 1,
         "estimator_mode": _estimator_mode(sweep_cfg),
-        "sglang_server_flags": sweep_cfg.get("sglang_server_flags"),
+        "sglang_server_flags": sglang_server_flags if sglang_server_flags is not None else sweep_cfg.get("sglang_server_flags"),
         "model_sglang_server_flags": model.get("sglang_server_flags"),
     }
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
@@ -547,7 +588,7 @@ def write_metadata(
     server_flags = model.get("resolved_sglang_server_flags")
     payload = {
         "model_config": {"model_name": model["id"], "precision": model_precision(model, cfg)},
-        "hardware": {"num_gpus": model.get("tp", 1), "gpu_type": os.environ.get("SBENCH_GPU_TYPE", "unknown")},
+        "hardware": {"num_gpus": resolved_num_gpus(model, server_flags), "gpu_type": os.environ.get("SBENCH_GPU_TYPE", "unknown")},
         "system_environment": {"batch_size": batch_size},
         "architecture_overrides": architecture_overrides(model, cfg),
         "estimator_mode": estimator_mode,
@@ -658,11 +699,56 @@ def hf_hub_download_kwargs(options: dict[str, Any] | None = None) -> dict[str, A
     return kwargs
 
 
-def merged_sglang_server_flags(config: dict[str, Any], model: dict[str, Any]) -> list[Any]:
+def merged_sglang_server_flags(config: dict[str, Any], model: dict[str, Any], hf_config: dict[str, Any] | None = None) -> list[Any]:
     flags = []
     flags.extend(config.get("sglang_server_flags") or [])
     flags.extend(model.get("sglang_server_flags") or [])
-    return flags
+    return resolve_expert_probe_flags(flags, model, hf_config)
+
+
+def resolve_expert_probe_flags(flags: Any, model: dict[str, Any], hf_config: dict[str, Any] | None = None) -> list[Any]:
+    """Keep MoE-only SGLang expert flags away from dense/non-MoE models."""
+
+    ordered: dict[str, Any] = {}
+    for flag, value in iter_sglang_server_flags(flags):
+        ordered[flag] = value
+    if model_uses_moe(model, hf_config):
+        for flag in DEFAULT_MOE_PROBE_FLAGS:
+            ordered.setdefault(flag, True)
+    else:
+        for flag in EXPERT_RECORDING_FLAGS:
+            ordered.pop(flag, None)
+    return [flag if value is True else {flag: value} for flag, value in ordered.items() if value is not None and value is not False]
+
+
+def model_uses_moe(model: dict[str, Any], hf_config: dict[str, Any] | None = None) -> bool:
+    explicit = model.get("expert_records")
+    if explicit is not None:
+        return bool(explicit)
+    cfg = hf_config if isinstance(hf_config, dict) and hf_config else model.get("resolved_hf_config")
+    if not isinstance(cfg, dict) or not cfg:
+        return False
+    try:
+        desc = descriptor_from_config(
+            cfg,
+            model_name=str(model.get("id", "")),
+            overrides={"architecture": model.get("architecture")} if model.get("architecture") else None,
+            num_gpus=int(model.get("tp", 1) or 1),
+        )
+    except Exception:
+        return has_moe_config_fields(cfg)
+    return bool(desc.moe.enabled and desc.moe.moe_layers > 0)
+
+
+def has_moe_config_fields(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    model_type = str(value.get("model_type", "")).lower()
+    if "moe" in model_type:
+        return True
+    if value.get("moe_intermediate_size") or value.get("num_experts") or value.get("n_routed_experts"):
+        return True
+    return any(has_moe_config_fields(item) for item in value.values() if isinstance(item, dict))
 
 
 def workload_sglang_server_flags(flags: Any, dataset_cfg: dict[str, Any]) -> list[Any]:

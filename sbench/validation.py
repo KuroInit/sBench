@@ -13,6 +13,7 @@ from .adapters import resolve_adapter
 from .estimator import EstimateResult, estimate_records, usable_records
 from .hardware import peak_bandwidth_tb, peak_flops_tf
 from .moe_cap_estimator import estimate_moe_cap_compatible, support_status
+from .trace import moe_activation_note, required_forward_modes
 
 
 METRICS = (
@@ -87,19 +88,23 @@ def estimator_comparison_rows(results_dir: Path, *, sample_limit: int | None = N
                 filtered = filtered[:limit]
             if not filtered:
                 raise ValueError("no usable records")
-            required_modes = {"prefill", "decode"} if meta.get("dataset_config") else set()
+            required_modes = required_forward_modes(meta.get("dataset_config", {}) or {}, dataset) if meta.get("dataset_config") else set()
             missing_modes = required_modes - {str(record.get("forward_mode")) for record in filtered}
             if missing_modes:
                 raise ValueError(f"metric sample is missing required forward mode(s): {', '.join(sorted(missing_modes))}")
-            adapter = adapter_from_metadata(meta)
+            adapter = adapter_from_metadata(meta, filtered)
             component = estimate_records(adapter.descriptor, filtered, components=adapter.components)
             cap_result = None
             cap_status = support_status(adapter.descriptor)
             cap_error = ""
             if cap_status.supported:
-                cap_result = estimate_moe_cap_compatible(adapter.descriptor, filtered)
+                try:
+                    cap_result = estimate_moe_cap_compatible(adapter.descriptor, filtered)
+                except ValueError as exc:
+                    cap_error = str(exc)
             else:
                 cap_error = cap_status.reason
+            note = moe_activation_note(filtered) if adapter.descriptor.moe.enabled else ""
             run_rows.append({
                 **base,
                 "status": "success",
@@ -107,6 +112,7 @@ def estimator_comparison_rows(results_dir: Path, *, sample_limit: int | None = N
                 "records": len(filtered),
                 "moe_cap_supported": cap_status.supported,
                 "moe_cap_error": cap_error,
+                "note": note,
             })
             metric_rows.extend(metric_comparison_rows(base, component, cap_result, cap_error))
         except Exception as exc:
@@ -114,7 +120,7 @@ def estimator_comparison_rows(results_dir: Path, *, sample_limit: int | None = N
     return metric_rows, run_rows
 
 
-def adapter_from_metadata(meta: dict[str, Any]):
+def adapter_from_metadata(meta: dict[str, Any], records: list[dict[str, Any]] | None = None):
     model_cfg = meta.get("model_config", {}) or {}
     model = model_cfg.get("model_name", "")
     precision = model_cfg.get("precision", "bfloat16")
@@ -129,10 +135,17 @@ def adapter_from_metadata(meta: dict[str, Any]):
         model_name=model,
         overrides=overrides,
         precision_bytes=precision_bytes(precision),
-        num_gpus=int(hardware.get("num_gpus", 1) or 1),
+        num_gpus=analysis_num_gpus(hardware, records or []),
         peak_bandwidth_tb=peak_bandwidth_tb(gpu),
         peak_flops_tf=peak_flops_tf(gpu, precision),
     )
+
+
+def analysis_num_gpus(hardware: dict[str, Any], records: list[dict[str, Any]]) -> int:
+    values = [int(record.get("num_gpus") or record.get("gpu_num") or 0) for record in records]
+    record_gpus = max(values) if values else 0
+    meta_gpus = int(hardware.get("num_gpus", 1) or 1)
+    return max(meta_gpus, record_gpus, 1)
 
 
 def metric_comparison_rows(

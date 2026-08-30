@@ -17,15 +17,9 @@ estimator_mode: component-wise
 #   - --mem-fraction-static: 0.90
 #   - --dtype: bfloat16
 #   - --served-model-name: qwen3_30b
-#   - --expert-distribution-recorder-mode: stat
-#   - --enable-return-routed-experts
-#   - --enable-expert-distribution-metrics
 sglang_server_flags:
   - --disable-custom-all-reduce
   - --disable-radix-cache
-  - --expert-distribution-recorder-mode: stat
-  - --enable-return-routed-experts
-  - --enable-expert-distribution-metrics
 
 models:
   # Dense Qwen3 (GQA)

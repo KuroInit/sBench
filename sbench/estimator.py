@@ -83,8 +83,6 @@ def usable_records(records: Iterable[dict]) -> list[dict]:
     out = []
     for source in records:
         record = dict(source)
-        if record.get("forward_mode") == "prefill" and int(record.get("seq_lens_sum", 0)) <= 10:
-            continue
         if record.get("forward_mode") == "prefill" and not _has_reliable_prefill_context_mass(record):
             continue
         latency = float(record.get("latency", 0) or 0)

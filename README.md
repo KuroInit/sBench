@@ -67,7 +67,7 @@ docker compose run --rm --service-ports sbench run
 Useful environment overrides:
 
 ```bash
-SBENCH_GPU_TYPE="NVIDIA GeForce RTX 3070 Ti" \
+SBENCH_GPU_TYPE="NVIDIA-H100-HBM3-80GB" \
 SWEEP_CONFIG=/workspace/configs/sweep.yaml \
 docker compose run --rm --service-ports sbench run
 ```

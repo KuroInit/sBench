@@ -171,13 +171,11 @@ def _extract_expert_activation(output: Any, *, profiling_only: bool) -> tuple[fl
         )
         utilization = _field(metrics, "expert_utilization", "average_expert_utilization")
         num_experts = _num_experts_from(metrics)
-        normalized = _normalize_activation_metric(activation, utilization, num_experts)
+        normalized = _normalize_activation_metric(activation, num_experts)
         if normalized is not None:
             source = "expert_distribution_metrics"
-            if activation is not None and num_experts and 0 < float(activation) <= 1.0:
+            if num_experts and 0 < float(activation) <= 1.0:
                 source = "expert_distribution_metrics_scaled"
-            elif activation is None and utilization is not None:
-                source = "expert_distribution_utilization_scaled"
             return normalized, float(utilization) if utilization is not None else None, source
     routed = getattr(output, "routed_experts_output", None)
     activation = _activation_from_routed_output(routed)
@@ -242,19 +240,22 @@ def _activation_from_topk_tensor(tensor: Any) -> Any:
     if valid.numel() == 0:
         return 0
     if tensor.ndim >= 3:
+        # SGLang's routed-expert API documents token-first IDs with logical
+        # shape [tokens, layers, top_k]. Treat the second-to-last axis as the
+        # layer axis and average the unique experts observed for each layer
+        # across the captured token/request dimensions.
         per_layer = []
-        for layer in tensor:
-            layer_valid = layer[layer >= 0]
+        for layer_idx in range(tensor.shape[-2]):
+            layer_values = tensor.select(-2, layer_idx)
+            layer_valid = layer_values[layer_values >= 0]
             per_layer.append(layer_valid.unique().numel() if layer_valid.numel() else 0)
         import torch
         return torch.as_tensor(per_layer, dtype=torch.float32).mean()
     return valid.unique().numel()
 
 
-def _normalize_activation_metric(activation: Any, utilization: Any, num_experts: int | None) -> float | None:
+def _normalize_activation_metric(activation: Any, num_experts: int | None) -> float | None:
     if activation is None:
-        if utilization is not None and num_experts:
-            return float(utilization) * num_experts
         return None
     value = float(activation)
     if num_experts and 0 < value <= 1.0:

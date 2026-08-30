@@ -11,11 +11,14 @@ from orchestrator import (
     append_sglang_server_flags,
     auto_config_kwargs,
     hf_hub_download_kwargs,
+    iter_sglang_server_flags,
     load_dataset_config,
     load_required_hf_config,
     merged_sglang_server_flags,
     model_precision,
+    model_uses_moe,
     required_forward_modes,
+    resolved_num_gpus,
     run_signature,
     server_startup_timeout,
     required_probe_records,
@@ -96,6 +99,7 @@ def test_probe_file_requires_prefill_and_decode_when_requested(tmp_path):
 def test_prefill_workload_requires_only_prefill_probe_phase():
     assert required_forward_modes({"benchmark_type": "prefill", "target_output_tokens": 1}) == {"prefill"}
     assert required_forward_modes({"benchmark_type": "chat", "target_output_tokens": 1}) == {"prefill", "decode"}
+    assert required_forward_modes({}, "batched_prefill") == {"prefill"}
 
 
 def test_checkpoint_signature_prevents_stale_skip(tmp_path):
@@ -191,6 +195,61 @@ def test_global_and_model_server_flags_are_merged_for_metadata_and_mini_swe():
     assert dataset_cfg["mini_model_name"] == "openai/model-name"
 
 
+def test_dense_model_strips_moe_expert_probe_flags():
+    config = {
+        "sglang_server_flags": [
+            "--disable-custom-all-reduce",
+            "--expert-distribution-recorder-mode",
+            "--enable-return-routed-experts",
+            "--enable-expert-distribution-metrics",
+        ]
+    }
+    model = {"id": "Qwen/Qwen3-8B", "slug": "qwen3_8b", "tp": 4}
+    hf_config = {
+        "model_type": "qwen3",
+        "num_hidden_layers": 36,
+        "hidden_size": 4096,
+        "intermediate_size": 12288,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+    }
+    flags = merged_sglang_server_flags(config, model, hf_config)
+    flat_flags = [flag for flag, _ in iter_sglang_server_flags(flags)]
+    assert "--disable-custom-all-reduce" in flat_flags
+    assert "--expert-distribution-recorder-mode" not in flat_flags
+    assert "--enable-return-routed-experts" not in flat_flags
+    assert "--enable-expert-distribution-metrics" not in flat_flags
+    assert not model_uses_moe(model, hf_config)
+
+
+def test_moe_model_gets_routed_expert_capture_flag():
+    config = {"sglang_server_flags": ["--disable-custom-all-reduce"]}
+    model = {"id": "Qwen/Qwen3-30B-A3B", "slug": "qwen3_30b_a3b", "tp": 4}
+    hf_config = {
+        "model_type": "qwen3_moe",
+        "num_hidden_layers": 48,
+        "hidden_size": 2048,
+        "intermediate_size": 6144,
+        "moe_intermediate_size": 768,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 4,
+        "head_dim": 128,
+        "num_experts": 128,
+        "num_experts_per_tok": 8,
+    }
+    flags = merged_sglang_server_flags(config, model, hf_config)
+    flat_flags = [flag for flag, _ in iter_sglang_server_flags(flags)]
+    assert "--disable-custom-all-reduce" in flat_flags
+    assert "--enable-return-routed-experts" in flat_flags
+    assert model_uses_moe(model, hf_config)
+
+
+def test_resolved_num_gpus_includes_pipeline_parallel_size():
+    assert resolved_num_gpus({"tp": 2, "pp": 3}, []) == 6
+    assert resolved_num_gpus({"tp": 2}, [{"--pp-size": 4}]) == 8
+
+
 def test_sglang_server_flags_support_strings_and_key_values():
     cmd = ["python"]
     append_sglang_server_flags(
@@ -218,6 +277,19 @@ def test_workload_prefix_cache_overrides_global_radix_cache_setting():
     assert "--disable-radix-cache" in workload_sglang_server_flags([], {"prefix_cache": False})
 
 
+def test_start_sglang_includes_model_pipeline_parallel_size(monkeypatch):
+    captured = {}
+
+    def fake_popen(cmd, env):
+        captured["cmd"] = cmd
+        return SimpleNamespace()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    start_sglang({"id": "Qwen/Test", "tp": 2, "pp": 3}, 8, 30000, {}, sglang_server_flags=[])
+    assert captured["cmd"][captured["cmd"].index("--tp-size") + 1] == "2"
+    assert captured["cmd"][captured["cmd"].index("--pp-size") + 1] == "3"
+
+
 def test_start_sglang_uses_resolved_flags_once(monkeypatch):
     captured = {}
 
@@ -241,3 +313,16 @@ def test_start_sglang_uses_resolved_flags_once(monkeypatch):
     assert captured["cmd"].count("--chunked-prefill-size") == 1
     assert "40960" in captured["cmd"]
     assert "4096" not in captured["cmd"]
+
+
+def test_start_sglang_deduplicates_tp_size_from_flags(monkeypatch):
+    captured = {}
+
+    def fake_popen(cmd, env):
+        captured["cmd"] = cmd
+        return SimpleNamespace()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    start_sglang({"id": "Qwen/Test", "tp": 2}, 8, 30000, {}, sglang_server_flags=[{"--tp-size": 4}])
+    assert captured["cmd"].count("--tp-size") == 1
+    assert captured["cmd"][captured["cmd"].index("--tp-size") + 1] == "4"

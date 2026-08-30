@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .descriptor import ArchitectureDescriptor
+from .trace import has_real_expert_activation
 
 
 @dataclass(frozen=True)
@@ -200,7 +201,7 @@ class MoEComponent:
             shared = moe.shared_expert_intermediate_size * 3 * moe.hidden_size / 1e12
         else:
             shared = moe.shared_experts * expert_size
-        activation = real_expert_activation(record)
+        activation = real_expert_activation(record) if has_real_expert_activation(record) else 0.0
         return ComponentCost(
             name=self.name,
             bandwidth_units=moe.moe_layers * (activation * expert_size + shared),

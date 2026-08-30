@@ -1,5 +1,6 @@
 from sbench.adapters import resolve_adapter
 from sbench.components import AttentionComponent, CacheComponent, MoEComponent, RouterComponent, prefill_context_mass
+from sbench.estimator import usable_records
 from sbench.descriptor import ArchitectureDescriptor, AttentionDescriptor, CacheDescriptor, FFNDescriptor, MoEDescriptor, RuntimeDescriptor, descriptor_from_config
 from sbench.estimator import estimate_records
 import pytest
@@ -100,6 +101,29 @@ def test_moe_bandwidth_uses_activation_but_flops_do_not():
     assert cost.flops_units == 2 * (2 * expert + expert)
 
 
+def test_dense_estimator_does_not_require_expert_activation():
+    desc = ArchitectureDescriptor(
+        attention=AttentionDescriptor(type="gqa", num_layers=2, hidden_size=16, num_attention_heads=2, num_key_value_heads=1, head_dim=8),
+        cache=CacheDescriptor(type="kv", num_layers=2, head_dim=8, num_key_value_heads=1),
+        ffn=FFNDescriptor(dense_layers=2, hidden_size=16, dense_intermediate_size=64),
+        runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
+    )
+    result = estimate_records(
+        desc,
+        [
+            {
+                "forward_mode": "decode",
+                "latency": 1.0,
+                "seq_lens_sum": 64,
+                "batch_size": 2,
+                "raw_probe_source": "timing_only",
+            }
+        ],
+    )
+    assert result.decoding_throughput == 2
+    assert result.decoding_smfu > 0
+
+
 
 def test_prefill_context_mass_uses_probe_total_len():
     record = {
@@ -165,10 +189,17 @@ def test_estimator_keeps_timing_only_records_for_dense_models():
     assert result.decoding_smfu > 0
 
 
-def test_component_wise_moe_requires_real_activation():
+def test_component_wise_moe_timing_only_returns_partial_underestimate():
     desc = ArchitectureDescriptor(moe=MoEDescriptor(enabled=True, moe_layers=2, hidden_size=10, expert_intermediate_size=5, shared_experts=1))
-    with pytest.raises(ValueError, match="requires real expert_activation"):
-        MoEComponent().estimate(desc, {"forward_mode": "prefill", "processed_tokens": 100})
+    cost = MoEComponent().estimate(desc, {"forward_mode": "prefill", "processed_tokens": 100, "raw_probe_source": "timing_only"})
+    expert = 5 * 3 * 10 / 1e12
+    assert cost.bandwidth_units == 2 * expert
+    assert cost.flops_units == 2 * (expert + expert)
+
+
+def test_estimator_keeps_short_prefill_records():
+    records = usable_records([{"forward_mode": "prefill", "latency": 0.5, "seq_lens_sum": 8, "batch_size": 1}])
+    assert len(records) == 1
 
 
 def test_moe_cap_compatible_qwen_requires_real_activation():

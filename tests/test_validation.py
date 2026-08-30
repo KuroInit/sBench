@@ -52,6 +52,29 @@ def test_run_validation_recomputes_component_and_moe_cap(tmp_path):
     assert prefill["ratio_component_over_moe_cap"]
 
 
+def test_run_validation_keeps_component_rows_when_moe_cap_lacks_activation(tmp_path):
+    leaf = tmp_path / "qwen3_30b" / "bs2" / "mmlu_pro" / "Qwen__Qwen3-30B-A3B"
+    leaf.mkdir(parents=True)
+    _write_metadata(leaf / "metadata_mmlu_pro.json")
+    (leaf / "server_records_mmlu_pro.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"forward_pass_id": 1, "forward_mode": "prefill", "latency": 0.1, "seq_lens_sum": 64, "processed_tokens": 64, "batch_size": 2, "expert_activation": 0, "raw_probe_source": "timing_only", "per_req_info": [{"extend_len": 32, "total_len": 32}, {"extend_len": 32, "total_len": 32}]}),
+                json.dumps({"forward_pass_id": 2, "forward_mode": "decode", "latency": 0.01, "seq_lens_sum": 64, "batch_size": 2, "expert_activation": 0, "raw_probe_source": "timing_only"}),
+            ]
+        )
+    )
+
+    result = run_validation(tmp_path, out_dir=tmp_path / "validation")
+
+    rows = list(csv.DictReader(result.estimator_comparison_path.open()))
+    assert rows
+    assert all(row["component_wise"] for row in rows if row["metric"] in {"prefill_smfu", "decoding_smfu"})
+    assert all(row["moe_cap_available"] == "False" for row in rows)
+    summary = json.loads(result.summary_path.read_text())
+    assert summary["successful_runs"] == 1
+
+
 def test_run_validation_compares_optional_profiler_summary(tmp_path):
     leaf = tmp_path / "qwen3_30b" / "bs2" / "mmlu_pro" / "Qwen__Qwen3-30B-A3B"
     leaf.mkdir(parents=True)

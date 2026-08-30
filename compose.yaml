@@ -14,8 +14,8 @@ services:
       SWEEP_CONFIG: ${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}/configs/sweep.yaml
       CHECKPOINT_PATH: ${SBENCH_WORKSPACE:-/home/kur0/Documents/sBench}/results/checkpoint.yaml
       DISABLE_RADIX_CACHE: "1"
-      SBENCH_GPU_TYPE: ${SBENCH_GPU_TYPE:-NVIDIA GeForce RTX 3070 Ti}
-      ANALYZE_GPU_TYPE: ${ANALYZE_GPU_TYPE:-NVIDIA GeForce RTX 3070 Ti}
+      SBENCH_GPU_TYPE: ${SBENCH_GPU_TYPE:-unknown}
+      ANALYZE_GPU_TYPE: ${ANALYZE_GPU_TYPE:-unknown}
       HF_TOKEN: ${HF_TOKEN:-}
       S_MFU_AZURE_CHAT_PATH: ${S_MFU_AZURE_CHAT_PATH:-}
       S_MFU_SHAREGPT_PATH: ${S_MFU_SHAREGPT_PATH:-}

@@ -14,6 +14,7 @@ from sbench.adapters import resolve_adapter
 from sbench.estimator import estimate_component_breakdown, estimate_records, usable_records
 from sbench.moe_cap_estimator import estimate_moe_cap_compatible
 from sbench.hardware import peak_bandwidth_tb, peak_flops_tf
+from sbench.trace import moe_activation_note, required_forward_modes
 
 
 def main() -> None:
@@ -78,7 +79,7 @@ def main() -> None:
                 model_name=model,
                 overrides=overrides,
                 precision_bytes=_precision_bytes(precision),
-                num_gpus=int(meta.get("hardware", {}).get("num_gpus", 1)),
+                num_gpus=_analysis_num_gpus(meta, filtered_records),
                 peak_bandwidth_tb=peak_bandwidth_tb(gpu),
                 peak_flops_tf=peak_flops_tf(gpu, precision),
             )
@@ -108,6 +109,7 @@ def main() -> None:
             "kv_size": result.kv_size,
             "metric_sample_records": len(filtered_records),
             "run_status": "success",
+            "note": moe_activation_note(filtered_records) if adapter.descriptor.moe.enabled else "",
         })
         for record in filtered_records:
             for cost in estimate_component_breakdown(adapter.descriptor, record, components=adapter.components):
@@ -177,14 +179,14 @@ def _metric_sample_limit(meta: dict[str, Any], dataset: str) -> int | None:
 
 def _missing_metric_modes(records: list[dict[str, Any]], meta: dict[str, Any], dataset: str) -> list[str]:
     present = {str(record.get("forward_mode")) for record in records}
-    return sorted(_required_metric_modes(meta, dataset) - present)
+    return sorted(required_forward_modes(meta.get("dataset_config", {}) or {}, dataset) - present)
 
 
-def _required_metric_modes(meta: dict[str, Any], dataset: str) -> set[str]:
-    cfg = meta.get("dataset_config", {}) or {}
-    if cfg.get("benchmark_type") == "prefill" or dataset == "batched_prefill":
-        return {"prefill"}
-    return {"prefill", "decode"}
+def _analysis_num_gpus(meta: dict[str, Any], records: list[dict[str, Any]]) -> int:
+    values = [int(record.get("num_gpus") or record.get("gpu_num") or 0) for record in records]
+    record_gpus = max(values) if values else 0
+    meta_gpus = int(meta.get("hardware", {}).get("num_gpus", 1) or 1)
+    return max(meta_gpus, record_gpus, 1)
 
 def _latest(path: Path, pattern: str) -> Path | None:
     matches = sorted(path.glob(pattern))

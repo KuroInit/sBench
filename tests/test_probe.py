@@ -1,6 +1,7 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
-from sbench_probe.sglang_probe import append_probe_error, build_probe_record
+from sbench_probe.sglang_probe import append_probe_error, build_probe_record, install_probe
 
 
 class Mode:
@@ -75,13 +76,26 @@ def test_probe_scales_fractional_expert_distribution_metric():
     assert record.expert_activation == 3.0
 
 
-def test_probe_uses_utilization_when_activation_count_missing():
+def test_probe_does_not_treat_utilization_as_activation_count():
     runner = SimpleNamespace(forward_pass_id=12, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
     batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=80)
     metrics = SimpleNamespace(expert_utilization=0.4, num_experts=60)
     record = build_probe_record(runner, batch, SimpleNamespace(expert_distribution_metrics=metrics), 0.2)
-    assert record.raw_probe_source == "expert_distribution_utilization_scaled"
-    assert record.expert_activation == 24.0
+    assert record.raw_probe_source == "timing_only"
+    assert record.expert_activation == 0.0
+
+
+def test_probe_topk_tensor_uses_token_layer_topk_shape():
+    runner = SimpleNamespace(forward_pass_id=12, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=2, seq_lens_sum=80)
+    # Official routed-expert API shape is [tokens, layers, top_k].
+    topk = [
+        [[1, 2], [4, 5]],
+        [[2, 3], [5, 6]],
+    ]
+    record = build_probe_record(runner, batch, SimpleNamespace(routed_experts_output={"topk": topk}), 0.2)
+    assert record.raw_probe_source == "routed_experts_output"
+    assert record.expert_activation == 3.0
 
 
 def test_probe_ignores_empty_stat_recorder_buffer_slots():
@@ -94,6 +108,69 @@ def test_probe_ignores_empty_stat_recorder_buffer_slots():
     output = SimpleNamespace(routed_experts_output={"logical_count": logical_count})
     record = build_probe_record(runner, batch, output, 0.2)
     assert record.expert_activation == 4.0
+
+
+def test_install_probe_wraps_forward_once_and_preserves_output(tmp_path, monkeypatch):
+    path = tmp_path / "server_records.jsonl"
+    calls = {"count": 0}
+
+    class FakeModelRunner:
+        def __init__(self):
+            self.forward_pass_id = 123
+            self.tp_size = 1
+            self.pp_size = 1
+            self.tp_rank = 0
+            self.server_args = SimpleNamespace()
+
+        def forward(self, forward_batch):
+            calls["count"] += 1
+            return SimpleNamespace(answer="original")
+
+    module = ModuleType("sglang.srt.model_executor.model_runner")
+    module.ModelRunner = FakeModelRunner
+    monkeypatch.setitem(sys.modules, "sglang", ModuleType("sglang"))
+    monkeypatch.setitem(sys.modules, "sglang.srt", ModuleType("sglang.srt"))
+    monkeypatch.setitem(sys.modules, "sglang.srt.model_executor", ModuleType("sglang.srt.model_executor"))
+    monkeypatch.setitem(sys.modules, "sglang.srt.model_executor.model_runner", module)
+
+    assert install_probe(str(path)) is True
+    wrapped = FakeModelRunner.forward
+    assert install_probe(str(path)) is True
+    assert FakeModelRunner.forward is wrapped
+
+    runner = FakeModelRunner()
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=2, seq_lens_sum=20)
+    output = runner.forward(batch)
+    assert output.answer == "original"
+    assert calls["count"] == 1
+    lines = path.read_text().splitlines()
+    assert len(lines) == 1
+    assert '"forward_pass_id": 123' in lines[0]
+
+
+def test_install_probe_writes_rank0_only(tmp_path, monkeypatch):
+    path = tmp_path / "server_records.jsonl"
+
+    class FakeModelRunner:
+        tp_size = 2
+        pp_size = 1
+        tp_rank = 1
+        forward_pass_id = 1
+        server_args = SimpleNamespace()
+
+        def forward(self, forward_batch):
+            return SimpleNamespace()
+
+    module = ModuleType("sglang.srt.model_executor.model_runner")
+    module.ModelRunner = FakeModelRunner
+    monkeypatch.setitem(sys.modules, "sglang", ModuleType("sglang"))
+    monkeypatch.setitem(sys.modules, "sglang.srt", ModuleType("sglang.srt"))
+    monkeypatch.setitem(sys.modules, "sglang.srt.model_executor", ModuleType("sglang.srt.model_executor"))
+    monkeypatch.setitem(sys.modules, "sglang.srt.model_executor.model_runner", module)
+
+    assert install_probe(str(path)) is True
+    FakeModelRunner().forward(SimpleNamespace(forward_mode=DecodeMode(), batch_size=1, seq_lens_sum=20))
+    assert not path.exists()
 
 
 def test_probe_error_writes_sidecar_log(tmp_path):
