@@ -17,29 +17,93 @@ sglang_server_flags:
   - --disable-radix-cache
 
 models:
-  # Dense / non-MoE baseline (GQA). Component-wise estimation does not require
-  # routed expert capture for this model.
-  - id: Qwen/Qwen3-8B
-    slug: qwen3_8b
+  # Active dense / non-MoE baseline. Standard Qwen3 GQA-style transformer;
+  # full attention. Component-wise estimation does not require routed expert
+  # capture for this model.
+  - id: Qwen/Qwen3-14B
+    slug: qwen3_14b
     tp: 4
     sglang_server_flags:
-      - --served-model-name: qwen3_8b
+      - --served-model-name: qwen3_14b
       - --dtype: bfloat16
       - --context-length: 16384
       - --chunked-prefill-size: 16384
       - --max-prefill-tokens: 16384
       - --mem-fraction-static: 0.90
 
-  # Regular MoE comparison target. The orchestrator auto-enables SGLang routed
-  # expert capture flags for MoE models so component-wise MoE bandwidth can use
-  # runtime expert activation when available.
-  - id: Qwen/Qwen3-30B-A3B
-    slug: qwen3_30b_a3b
+  # Other dense / non-MoE models available for this sweep:
+  # Qwen3-32B: standard Qwen3 GQA-style transformer; full attention.
+  # - id: Qwen/Qwen3-32B
+  #   slug: qwen3_32b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: qwen3_32b
+  #     - --dtype: bfloat16
+  #     - --context-length: 16384
+  #     - --chunked-prefill-size: 16384
+  #     - --max-prefill-tokens: 16384
+  #     - --mem-fraction-static: 0.90
+
+  # Qwen3.5-9B: dense / non-MoE with hybrid attention.
+  # - id: Qwen/Qwen3.5-9B
+  #   slug: qwen3_5_9b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: qwen3_5_9b
+  #     - --dtype: bfloat16
+  #     - --context-length: 16384
+  #     - --chunked-prefill-size: 16384
+  #     - --max-prefill-tokens: 16384
+  #     - --mem-fraction-static: 0.90
+
+  # Qwen3.6-27B: dense / non-MoE with hybrid attention.
+  # - id: Qwen/Qwen3.6-27B
+  #   slug: qwen3_6_27b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: qwen3_6_27b
+  #     - --dtype: bfloat16
+  #     - --context-length: 16384
+  #     - --chunked-prefill-size: 16384
+  #     - --max-prefill-tokens: 16384
+  #     - --mem-fraction-static: 0.90
+
+  # Active MoE comparison target. DeepSeek-V3-style MLA attention. The
+  # orchestrator auto-enables SGLang routed expert capture flags for MoE models
+  # so component-wise MoE bandwidth can use runtime expert activation when
+  # available.
+  - id: moonshotai/Moonlight-16B-A3B
+    slug: moonlight_16b_a3b
     tp: 4
     sglang_server_flags:
-      - --served-model-name: qwen3_30b_a3b
+      - --served-model-name: moonlight_16b_a3b
       - --dtype: bfloat16
       - --context-length: 16384
       - --chunked-prefill-size: 16384
       - --max-prefill-tokens: 16384
       - --mem-fraction-static: 0.90
+
+  # Other MoE models available for this sweep:
+  # Qwen3-30B-A3B: GQA-style transformer; active A3B-style sparse MoE.
+  # - id: Qwen/Qwen3-30B-A3B
+  #   slug: qwen3_30b_a3b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: qwen3_30b_a3b
+  #     - --dtype: bfloat16
+  #     - --context-length: 16384
+  #     - --chunked-prefill-size: 16384
+  #     - --max-prefill-tokens: 16384
+  #     - --mem-fraction-static: 0.90
+
+  # Qwen3.6-35B-A3B: hybrid attention; active A3B-style sparse MoE.
+  # - id: Qwen/Qwen3.6-35B-A3B
+  #   slug: qwen3_6_35b_a3b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: qwen3_6_35b_a3b
+  #     - --dtype: bfloat16
+  #     - --context-length: 16384
+  #     - --chunked-prefill-size: 16384
+  #     - --max-prefill-tokens: 16384
+  #     - --mem-fraction-static: 0.90
