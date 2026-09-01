@@ -11,7 +11,8 @@ estimator_mode: component-wise
 # NSCC Singapore / Aspire2A defaults:
 # - scripts/nscc_env.sh sets SBENCH_GPU_TYPE/ANALYZE_GPU_TYPE to NVIDIA A100-SXM4-40GB.
 # - PBS currently requests 1 node with 4 GPUs, so both selected models use tp: 4.
-# - Keep model context and chunked prefill at 16K for comparable runs.
+# - Keep model context and chunked prefill at 8K for Moonlight, because
+#   SGLang derives an 8192-token max context for moonshotai/Moonlight-16B-A3B.
 sglang_server_flags:
   - --disable-custom-all-reduce
   - --disable-radix-cache
@@ -20,16 +21,16 @@ models:
   # Active dense / non-MoE baseline. Standard Qwen3 GQA-style transformer;
   # full attention. Component-wise estimation does not require routed expert
   # capture for this model.
-  - id: Qwen/Qwen3-14B
-    slug: qwen3_14b
-    tp: 4
-    sglang_server_flags:
-      - --served-model-name: qwen3_14b
-      - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --max-prefill-tokens: 16384
-      - --mem-fraction-static: 0.90
+  # - id: Qwen/Qwen3-14B
+  #   slug: qwen3_14b
+  #   tp: 4
+  #   sglang_server_flags:
+  #     - --served-model-name: qwen3_14b
+  #     - --dtype: bfloat16
+  #     - --context-length: 16384
+  #     - --chunked-prefill-size: 16384
+  #     - --max-prefill-tokens: 16384
+  #     - --mem-fraction-static: 0.90
 
   # Other dense / non-MoE models available for this sweep:
   # Qwen3-32B: standard Qwen3 GQA-style transformer; full attention.
@@ -78,9 +79,9 @@ models:
     sglang_server_flags:
       - --served-model-name: moonlight_16b_a3b
       - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --max-prefill-tokens: 16384
+      - --context-length: 8192
+      - --chunked-prefill-size: 8192
+      - --max-prefill-tokens: 8192
       - --mem-fraction-static: 0.90
 
   # Other MoE models available for this sweep:
