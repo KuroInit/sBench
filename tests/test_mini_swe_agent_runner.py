@@ -5,6 +5,9 @@ import pytest
 from sbench.mini_swe_agent_runner import (
     build_mini_swe_agent_command,
     configure_openai_env,
+    effective_dataset_config,
+    effective_issue_count,
+    effective_workers,
     expected_prediction_count,
     mini_swe_config_args,
     mini_swe_local_model_config_args,
@@ -161,6 +164,18 @@ def test_expected_prediction_count_honors_slice_extra_args():
     assert expected_prediction_count({"extra_args": ["--slice", "0:8"]}) == 8
     assert expected_prediction_count({"extra_args": ["--slice=23"]}) == 1
     assert expected_prediction_count({"issue_count": 3}) == 3
+
+
+def test_effective_issue_count_can_follow_batch_size_with_cap(tmp_path):
+    cfg = {"environment_class": "singularity", "issue_count_from_batch_size": True, "max_issue_count": 8, "max_workers": 8}
+    assert effective_issue_count(cfg, 64) == 8
+    assert effective_workers(cfg, 64) == 8
+    materialized = effective_dataset_config(cfg, 4)
+    assert materialized["issue_count"] == 4
+    assert materialized["workers"] == 4
+    command = build_mini_swe_agent_command(model_id="Qwen/Test", batch_size=64, dataset_cfg=cfg, output_dir=tmp_path)
+    assert command[command.index("--slice") + 1] == "0:8"
+    assert command[command.index("--workers") + 1] == "8"
 
 
 def test_mini_swe_output_validation_requires_valid_submission(tmp_path):

@@ -42,6 +42,7 @@ def run_mini_swe_agent(
     releases and lets users choose Docker or Singularity in YAML.
     """
 
+    dataset_cfg = effective_dataset_config(dataset_cfg, batch_size)
     mini_env = os.environ.copy()
     if env:
         mini_env.update(env)
@@ -103,6 +104,7 @@ def build_mini_swe_agent_command(
     output_dir: Path,
     openai_api_base: str | None = None,
 ) -> list[str]:
+    dataset_cfg = effective_dataset_config(dataset_cfg, batch_size)
     env_class = str(dataset_cfg.get("environment_class", "docker")).lower()
     if env_class not in SUPPORTED_ENVIRONMENT_CLASSES:
         supported = ", ".join(sorted(SUPPORTED_ENVIRONMENT_CLASSES))
@@ -119,7 +121,7 @@ def build_mini_swe_agent_command(
         "--split",
         str(dataset_cfg.get("split", "dev")),
         "--workers",
-        str(dataset_cfg.get("workers", batch_size)),
+        str(effective_workers(dataset_cfg, batch_size)),
         "--environment-class",
         env_class,
         str(dataset_cfg.get("output_flag", "--output")),
@@ -137,11 +139,23 @@ def build_mini_swe_agent_command(
         for instance_id in instance_ids:
             command += ["-i", str(instance_id)]
     extra_args = dataset_cfg.get("extra_args") or []
-    if dataset_cfg.get("issue_count") is not None and not instance_ids and slice_from_extra_args(extra_args) is None:
-        command.extend(["--slice", f"0:{int(dataset_cfg['issue_count'])}"])
+    issue_count = effective_issue_count(dataset_cfg, batch_size)
+    if issue_count is not None and not instance_ids and slice_from_extra_args(extra_args) is None:
+        command.extend(["--slice", f"0:{issue_count}"])
     if extra_args:
         command.extend(str(arg) for arg in extra_args)
     return command
+
+
+def effective_dataset_config(dataset_cfg: dict[str, Any], batch_size: int) -> dict[str, Any]:
+    """Materialize batch-dependent mini-SWE profiling settings."""
+
+    cfg = dict(dataset_cfg)
+    issue_count = effective_issue_count(cfg, batch_size)
+    if issue_count is not None:
+        cfg["issue_count"] = issue_count
+    cfg["workers"] = effective_workers(cfg, batch_size)
+    return cfg
 
 
 def mini_swe_config_args(dataset_cfg: dict[str, Any]) -> list[str]:
@@ -234,6 +248,35 @@ def expected_prediction_count(dataset_cfg: dict[str, Any]) -> int:
         if count is not None:
             return count
     return int(dataset_cfg.get("issue_count", 1))
+
+
+def effective_workers(dataset_cfg: dict[str, Any], batch_size: int) -> int:
+    """Return mini-SWE workers for this profiling point.
+
+    By default this preserves the historical mapping of sBench batch size to
+    mini-SWE workers. ``max_workers`` caps that mapping so large profiling
+    sweeps do not accidentally create excessive container pressure.
+    """
+
+    workers = int(dataset_cfg.get("workers", batch_size))
+    max_workers = dataset_cfg.get("max_workers")
+    if max_workers is not None:
+        workers = min(workers, int(max_workers))
+    return max(workers, 1)
+
+
+def effective_issue_count(dataset_cfg: dict[str, Any], batch_size: int) -> int | None:
+    """Return the number of SWE instances to select for this profiling point."""
+
+    if bool(dataset_cfg.get("issue_count_from_batch_size", False)):
+        count = int(batch_size)
+        max_issue_count = dataset_cfg.get("max_issue_count")
+        if max_issue_count is not None:
+            count = min(count, int(max_issue_count))
+        return max(count, 1)
+    if dataset_cfg.get("issue_count") is not None:
+        return max(int(dataset_cfg["issue_count"]), 1)
+    return None
 
 
 def slice_from_extra_args(extra_args: list[Any]) -> str | None:

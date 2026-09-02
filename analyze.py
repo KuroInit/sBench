@@ -92,10 +92,14 @@ def main() -> None:
         except Exception as exc:
             rows.append(_synthetic_failure_row(leaf, results_dir, str(exc)))
             continue
+        batch_stats = _batch_stats(filtered_records)
+        workload = meta.get("workload_result") or {}
         rows.append({
             "dataset": dataset,
             "slug": slug,
             "batch_size": bs,
+            "actual_batch_size_mean": batch_stats["mean"],
+            "actual_batch_size_max": batch_stats["max"],
             "adapter": adapter.name,
             "estimator": estimator_used,
             "prefill_tokens_per_sec": result.prefill_tp,
@@ -109,6 +113,11 @@ def main() -> None:
             "kv_size": result.kv_size,
             "metric_sample_records": len(filtered_records),
             "run_status": "success",
+            "trace_status": "success",
+            "workload_status": workload.get("workload_status", "success"),
+            "submission_status": workload.get("submission_status", "not_applicable"),
+            "submission_valid": workload.get("submission_valid", ""),
+            "workload_error": workload.get("workload_error", ""),
             "note": moe_activation_note(filtered_records) if adapter.descriptor.moe.enabled else "",
         })
         for record in filtered_records:
@@ -188,6 +197,14 @@ def _analysis_num_gpus(meta: dict[str, Any], records: list[dict[str, Any]]) -> i
     meta_gpus = int(meta.get("hardware", {}).get("num_gpus", 1) or 1)
     return max(meta_gpus, record_gpus, 1)
 
+
+def _batch_stats(records: list[dict[str, Any]]) -> dict[str, float | int | str]:
+    values = [int(record.get("batch_size") or 0) for record in records if int(record.get("batch_size") or 0) > 0]
+    if not values:
+        return {"mean": "", "max": ""}
+    return {"mean": sum(values) / len(values), "max": max(values)}
+
+
 def _latest(path: Path, pattern: str) -> Path | None:
     matches = sorted(path.glob(pattern))
     return matches[-1] if matches else None
@@ -199,12 +216,12 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _failure_row(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text())
-    return {"dataset": data.get("dataset"), "slug": data.get("slug"), "batch_size": data.get("batch_size"), "run_status": data.get("status", "failed"), "error": data.get("error", ""), "prefill_smfu": 0, "prefill_smbu": 0, "decoding_smfu": 0, "decoding_smbu": 0}
+    return {"dataset": data.get("dataset"), "slug": data.get("slug"), "batch_size": data.get("batch_size"), "run_status": data.get("status", "failed"), "trace_status": "failed", "workload_status": "failed", "submission_status": "unknown", "error": data.get("error", ""), "prefill_smfu": 0, "prefill_smbu": 0, "decoding_smfu": 0, "decoding_smbu": 0}
 
 
 def _synthetic_failure_row(leaf: Path, root: Path, error: str) -> dict[str, Any]:
     dataset, slug, bs = _parts(root, leaf)
-    return {"dataset": dataset, "slug": slug, "batch_size": bs, "run_status": "failed", "error": error, "prefill_smfu": 0, "prefill_smbu": 0, "decoding_smfu": 0, "decoding_smbu": 0}
+    return {"dataset": dataset, "slug": slug, "batch_size": bs, "run_status": "failed", "trace_status": "failed", "workload_status": "failed", "submission_status": "unknown", "error": error, "prefill_smfu": 0, "prefill_smbu": 0, "decoding_smfu": 0, "decoding_smbu": 0}
 
 
 def _parts(root: Path, leaf: Path) -> tuple[str, str, str]:

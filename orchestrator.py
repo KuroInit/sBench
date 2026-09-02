@@ -17,7 +17,7 @@ from urllib.request import urlopen
 
 from sbench.datasets import load_dataset
 from sbench.descriptor import descriptor_from_config
-from sbench.mini_swe_agent_runner import run_mini_swe_agent
+from sbench.mini_swe_agent_runner import effective_dataset_config as effective_mini_swe_dataset_config, run_mini_swe_agent
 from sbench.runner import run_requests, write_request_results
 from sbench.trace import required_forward_modes as trace_required_forward_modes
 
@@ -61,6 +61,8 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
         slug = model["slug"]
         base_server_flags = merged_sglang_server_flags(config, model, resolved_config)
         dataset_cfg = load_dataset_config(dataset, model, base_server_flags)
+        if dataset_cfg.get("runner") == "mini_swe_agent":
+            dataset_cfg = effective_mini_swe_dataset_config(dataset_cfg, int(bs))
         server_flags = workload_sglang_server_flags(base_server_flags, dataset_cfg)
         model["resolved_sglang_server_flags"] = server_flags
         signature = run_signature(
@@ -101,6 +103,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                 write_failure(leaf_dir, dataset, model, int(bs), error)
                 checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
                 continue
+            workload_result: dict[str, Any] | None = None
             if dataset_cfg.get("runner") == "mini_swe_agent":
                 mini_result = run_mini_swe_agent(
                     api_base=f"http://127.0.0.1:{port}",
@@ -110,11 +113,18 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                     output_dir=leaf_dir / "mini_swe_agent",
                     env=env,
                 )
-                if not mini_result.success:
-                    error = mini_result.error or "mini-SWE-agent failed"
-                    write_failure(leaf_dir, dataset, model, int(bs), error)
-                    checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
-                    continue
+                workload_result = {
+                    "runner": "mini_swe_agent",
+                    "workload_status": "success" if mini_result.returncode == 0 else "failed",
+                    "submission_status": "submitted" if mini_result.success else "missing_or_invalid",
+                    "submission_valid": bool(mini_result.success),
+                    "workload_error": mini_result.error,
+                    "command": mini_result.command,
+                    "returncode": mini_result.returncode,
+                    "output_dir": mini_result.output_dir,
+                    "stdout_path": mini_result.stdout_path,
+                    "stderr_path": mini_result.stderr_path,
+                }
             else:
                 requests = load_dataset(dataset, dataset_cfg, limit=dataset_cfg.get("num_samples"))
                 if not requests:
@@ -140,7 +150,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                     write_failure(leaf_dir, dataset, model, int(bs), error)
                     checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
                     continue
-            write_metadata(leaf_dir, dataset, model, int(bs), dataset_cfg, estimator_mode=estimator_mode)
+            write_metadata(leaf_dir, dataset, model, int(bs), dataset_cfg, estimator_mode=estimator_mode, workload_result=workload_result)
             ok, error = validate_probe_file(
                 probe_path,
                 minimum_usable_records=required_probe_records(dataset_cfg),
@@ -397,6 +407,10 @@ def validate_dataset_config(dataset: str, cfg: dict[str, Any]) -> None:
             raise SystemExit(f"{dataset} metric_sample_steps must be positive")
         if "issue_count" in cfg and int(cfg["issue_count"]) <= 0:
             raise SystemExit(f"{dataset} issue_count must be positive")
+        if "max_issue_count" in cfg and int(cfg["max_issue_count"]) <= 0:
+            raise SystemExit(f"{dataset} max_issue_count must be positive")
+        if "max_workers" in cfg and int(cfg["max_workers"]) <= 0:
+            raise SystemExit(f"{dataset} max_workers must be positive")
 
 
 def validate_architecture_overrides(overrides: Any) -> None:
@@ -583,6 +597,7 @@ def write_metadata(
     cfg: dict[str, Any],
     *,
     estimator_mode: str,
+    workload_result: dict[str, Any] | None = None,
 ) -> None:
     hf_config = model_config_for_metrics(model)
     server_flags = model.get("resolved_sglang_server_flags")
@@ -596,6 +611,8 @@ def write_metadata(
         "hf_config": hf_config,
         "dataset_config": cfg,
     }
+    if workload_result is not None:
+        payload["workload_result"] = workload_result
     (leaf / f"metadata_{dataset}_{timestamp()}.json").write_text(json.dumps(payload, indent=2))
 
 

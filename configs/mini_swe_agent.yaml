@@ -8,9 +8,16 @@ precision: bfloat16
 target_output_tokens: 0
 num_samples: 200
 metric_sample_steps: 200
-issue_count: 1
+# For profiling, materialize a small issue pool per concurrency point instead
+# of running one issue for every nominal worker. This gives real multi-agent
+# load up to 8 concurrent SWE instances without risking 64 Singularity jobs.
+issue_count_from_batch_size: true
+max_issue_count: 8
+max_workers: 8
 min_success_rate: 1.0
 prefix_cache: true
+# Profiling validity is determined from server traces; patch submission is
+# recorded separately in metadata/raw_values and should not discard trace data.
 require_output_artifacts: true
 predictions_file: preds.json
 timeout_seconds: 14400

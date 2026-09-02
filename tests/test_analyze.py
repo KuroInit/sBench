@@ -134,6 +134,32 @@ def test_analyze_prefers_saved_estimator_mode_over_current_sweep(tmp_path):
     assert "moe-cap" in (tmp_path / "raw_values.csv").read_text()
 
 
+def test_analyze_keeps_traced_mini_swe_when_submission_failed(tmp_path):
+    leaf = tmp_path / "qwen" / "bs2" / "mini_swe_agent" / "Qwen" / "Model"
+    leaf.mkdir(parents=True)
+    meta = {
+        "model_config": {"model_name": "Qwen/Test", "precision": "bfloat16"},
+        "hardware": {"num_gpus": 1, "gpu_type": "NVIDIA-A100-SXM4-40GB"},
+        "hf_config": {"num_hidden_layers": 1, "hidden_size": 8, "num_attention_heads": 1, "head_dim": 8, "intermediate_size": 16},
+        "architecture_overrides": {},
+        "dataset_config": {"runner": "mini_swe_agent", "metric_sample_steps": 2},
+        "workload_result": {"workload_status": "success", "submission_status": "missing_or_invalid", "submission_valid": False, "workload_error": "no model_patch"},
+    }
+    (leaf / "metadata_mini_swe_agent_1.json").write_text(json.dumps(meta))
+    records = [
+        {"forward_pass_id": 1, "forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "expert_activation": 0},
+        {"forward_pass_id": 2, "forward_mode": "decode", "latency": 1.0, "seq_lens_sum": 101, "batch_size": 1, "expert_activation": 0},
+    ]
+    (leaf / "server_records_mini_swe_agent_1.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    env = os.environ.copy()
+    env.pop("ANALYZE_GPU_TYPE", None)
+    subprocess.check_call([sys.executable, str(Path(__file__).parents[1] / "analyze.py"), str(tmp_path)], env=env)
+    raw = (tmp_path / "raw_values.csv").read_text()
+    assert "trace_status" in raw
+    assert "missing_or_invalid" in raw
+    assert "no model_patch" in raw
+
+
 def test_mini_swe_metric_sample_limit_uses_step_count():
     import analyze
 
