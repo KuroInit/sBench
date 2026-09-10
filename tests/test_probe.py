@@ -1,6 +1,7 @@
 import sys
 from types import ModuleType, SimpleNamespace
 
+from sbench_probe.record_schema import ProbeRecord
 from sbench_probe.sglang_probe import append_probe_error, build_probe_record, install_probe
 
 
@@ -39,6 +40,20 @@ def test_probe_decode_without_expert_data_is_timing_only_but_analyzable():
     assert record.expert_activation == 0
     assert record.raw_probe_source == "timing_only"
     assert record.processed_tokens == 4
+
+
+def test_probe_record_carries_completion_timestamp():
+    runner = SimpleNamespace(forward_pass_id=8, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=400)
+    record = build_probe_record(runner, batch, SimpleNamespace(), 0.1)
+    assert isinstance(record.ts, float)
+    assert record.to_dict()["ts"] == record.ts
+
+
+def test_probe_record_ts_defaults_to_none():
+    record = ProbeRecord(forward_pass_id=1, forward_mode="decode", latency=0.1, seq_lens_sum=10, batch_size=1)
+    assert record.ts is None
+    assert "ts" in record.to_dict()
 
 
 def test_probe_profiling_only_sets_activation_zero():

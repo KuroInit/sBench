@@ -8,6 +8,13 @@ port: 30000
 server_startup_timeout_seconds: 3600
 estimator_mode: component-wise
 
+# Concurrent DCGM hardware profiling (see README "DCGM Hardware Profiling").
+# Best-effort: runs proceed without telemetry when dcgmi is unavailable.
+dcgm:
+  enabled: true
+  interval_ms: 100
+  fields: [1001, 1002, 1003, 1004, 1005]   # GR_ENGINE/SM_ACTIVE/SM_OCCUPANCY/TENSOR/DRAM
+
 # NSCC Singapore / Aspire2A defaults:
 # - scripts/nscc_env.sh sets SBENCH_GPU_TYPE/ANALYZE_GPU_TYPE to NVIDIA A100-SXM4-40GB.
 # - PBS currently requests 1 node with 4 GPUs, so selected models use tp: 4.

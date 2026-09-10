@@ -157,8 +157,60 @@ container. On HPC systems without Docker socket access, keep using
 ```text
 results/<slug>/bs<N>/<dataset>/<model_id>/server_records_*.jsonl
 results/<slug>/bs<N>/<dataset>/<model_id>/metadata_*.json
+results/<slug>/bs<N>/<dataset>/<model_id>/dcgm_dmon_<dataset>_<timestamp>.csv
 results/raw_values.csv
 results/component_breakdown.csv
+results/telemetry_summary.csv          # only when DCGM telemetry was collected
+```
+
+## DCGM Hardware Profiling
+
+The orchestrator runs `dcgmi dmon` concurrently with every benchmark run. DCGM
+sampling is lightweight (a few percent of one core at the default 100 ms
+interval), so hardware utilization data is collected during the run and its
+graphs are produced next to the benchmarking result graphs for validation.
+
+Per run, the sampler records DCGM profiler fields for every GPU (default field
+IDs 1001-1005: GR_ENGINE_ACTIVE, SM_ACTIVE, SM_OCCUPANCY, PIPE_TENSOR_ACTIVE,
+DRAM_ACTIVE) as a timestamped time series in
+`dcgm_dmon_<dataset>_<timestamp>.csv`.
+
+Configure in `configs/sweep.yaml`:
+
+```yaml
+dcgm:
+  enabled: true       # default; set false to skip sampling entirely
+  interval_ms: 100    # dmon update interval in milliseconds
+  fields: [1001, 1002, 1003, 1004, 1005]
+```
+
+Sampling is best-effort and never fails a run: a missing `dcgmi` binary, a
+stopped `nv-hostengine`, or fields unsupported by the GPU degrade to a
+`[dcgm]` warning in the sweep log and a `telemetry.dcgm.status` entry in the
+run's `metadata_*.json`. DCGM targets datacenter GPUs; consumer GPUs
+(GeForce) report the sampler as unavailable and runs proceed without
+telemetry.
+
+Phase attribution: probe records carry `ts` (unix seconds at forward-pass
+completion). Analysis joins DCGM samples to the prefill/decode windows
+reconstructed from `server_records_*.jsonl`. Records without `ts` fall back
+to a single whole-run aggregate with phase `run`.
+
+After a sweep, `python analyze.py results` additionally writes:
+
+```text
+results/telemetry_summary.csv             per-run/per-phase DCGM means
+results/dcgm_sm_active_all_datasets_xlog*.png
+results/dcgm_dram_active_all_datasets_xlog*.png
+results/dcgm_vs_estimator_all_datasets_xlog*.png
+```
+
+`telemetry_summary.csv` uses the schema consumed by
+`validate_estimator.py --telemetry-summary`, so the lightweight validation
+runs directly from the sweep outputs:
+
+```bash
+python validate_estimator.py results --telemetry-summary results/telemetry_summary.csv
 ```
 
 ## Post-Run Validation

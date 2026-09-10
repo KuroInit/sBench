@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
+from sbench import dcgm
 from sbench.datasets import load_dataset
 from sbench.descriptor import descriptor_from_config
 from sbench.mini_swe_agent_runner import effective_dataset_config as effective_mini_swe_dataset_config, run_mini_swe_agent
@@ -89,6 +90,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
         existing_pythonpath = env.get("PYTHONPATH")
         env["PYTHONPATH"] = str(PROJECT_ROOT) if not existing_pythonpath else f"{PROJECT_ROOT}:{existing_pythonpath}"
         env["SBENCH_GPU_TYPE"] = env.get("ANALYZE_GPU_TYPE", env.get("SBENCH_GPU_TYPE", "unknown"))
+        dcgm_sampler = None
         set_probe_model_env(env, model)
         proc = start_sglang(
             model,
@@ -103,6 +105,12 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                 write_failure(leaf_dir, dataset, model, int(bs), error)
                 checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
                 continue
+            dcgm_sampler = dcgm.sampler_from_config(
+                config.get("dcgm"),
+                leaf_dir / f"dcgm_dmon_{dataset}_{timestamp()}.csv",
+            )
+            if dcgm_sampler is not None and not dcgm_sampler.start():
+                print(f"[dcgm] sampler unavailable: {dcgm_sampler.status}")
             workload_result: dict[str, Any] | None = None
             if dataset_cfg.get("runner") == "mini_swe_agent":
                 mini_result = run_mini_swe_agent(
@@ -149,8 +157,8 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
                 if not ok:
                     write_failure(leaf_dir, dataset, model, int(bs), error)
                     checkpoint.mark(slug, int(bs), dataset, "failed", signature, error, model["id"])
-                    continue
-            write_metadata(leaf_dir, dataset, model, int(bs), dataset_cfg, estimator_mode=estimator_mode, workload_result=workload_result)
+            dcgm_telemetry = dcgm.stop_sampler(dcgm_sampler)
+            write_metadata(leaf_dir, dataset, model, int(bs), dataset_cfg, estimator_mode=estimator_mode, workload_result=workload_result, telemetry=dcgm_telemetry)
             ok, error = validate_probe_file(
                 probe_path,
                 minimum_usable_records=required_probe_records(dataset_cfg),
@@ -166,6 +174,7 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             write_failure(leaf_dir, dataset, model, int(bs), str(exc))
             checkpoint.mark(slug, int(bs), dataset, "failed", signature, str(exc), model["id"])
         finally:
+            dcgm.stop_sampler(dcgm_sampler)
             stop_process(proc)
     print(f"[sweep] complete {done}/{total}")
 
@@ -381,6 +390,7 @@ def validate_config(config: dict[str, Any]) -> None:
             raise SystemExit("models must not define hf_config; model architecture is loaded from config.json")
         validate_architecture_overrides(model.get("architecture"))
         validate_config_loader(model.get("config_loader"))
+    validate_dcgm_config(config.get("dcgm"))
     if not config.get("batch_sizes"):
         raise SystemExit("batch_sizes is required")
 
@@ -423,6 +433,19 @@ def validate_architecture_overrides(overrides: Any) -> None:
     if invalid:
         names = ", ".join(invalid)
         raise SystemExit(f"model architecture overrides must use component keys only; invalid keys: {names}")
+
+
+def validate_dcgm_config(cfg: Any) -> None:
+    if cfg is None:
+        return
+    if not isinstance(cfg, dict):
+        raise SystemExit("dcgm must be a mapping")
+    if "enabled" in cfg and not isinstance(cfg["enabled"], bool):
+        raise SystemExit("dcgm enabled must be true or false")
+    if "interval_ms" in cfg and (not isinstance(cfg["interval_ms"], int) or isinstance(cfg["interval_ms"], bool) or cfg["interval_ms"] <= 0):
+        raise SystemExit("dcgm interval_ms must be a positive integer")
+    if "fields" in cfg and (not isinstance(cfg["fields"], list) or not all(isinstance(field, int) and not isinstance(field, bool) for field in cfg["fields"])):
+        raise SystemExit("dcgm fields must be a list of field ids")
 
 
 def validate_config_loader(options: Any) -> None:
@@ -598,6 +621,7 @@ def write_metadata(
     *,
     estimator_mode: str,
     workload_result: dict[str, Any] | None = None,
+    telemetry: dict[str, Any] | None = None,
 ) -> None:
     hf_config = model_config_for_metrics(model)
     server_flags = model.get("resolved_sglang_server_flags")
@@ -613,6 +637,8 @@ def write_metadata(
     }
     if workload_result is not None:
         payload["workload_result"] = workload_result
+    if telemetry is not None:
+        payload["telemetry"] = {"dcgm": telemetry}
     (leaf / f"metadata_{dataset}_{timestamp()}.json").write_text(json.dumps(payload, indent=2))
 
 

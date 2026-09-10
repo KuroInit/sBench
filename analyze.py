@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from sbench import dcgm
 from sbench.adapters import resolve_adapter
 from sbench.estimator import estimate_component_breakdown, estimate_records, usable_records
 from sbench.moe_cap_estimator import estimate_moe_cap_compatible
@@ -126,6 +127,10 @@ def main() -> None:
     _write_csv(results_dir / "raw_values.csv", rows)
     _write_csv(results_dir / "component_breakdown.csv", breakdown_rows)
     _write_plots(results_dir, rows)
+    telemetry_rows = dcgm.telemetry_summary_rows(results_dir)
+    if telemetry_rows:
+        _write_csv(results_dir / "telemetry_summary.csv", telemetry_rows)
+        _write_telemetry_plots(results_dir, rows, telemetry_rows)
     print(f"wrote {results_dir / 'raw_values.csv'}")
 
 
@@ -323,6 +328,139 @@ def _plot_value(row: dict[str, Any], key: str) -> float:
     return value
 
 
+def _write_telemetry_plots(results_dir: Path, rows: list[dict[str, Any]], telemetry_rows: list[dict[str, Any]]) -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    _remove_stale_plot_files(results_dir)
+
+    success = [row for row in rows if row.get("run_status") == "success"]
+    phase_rows = [row for row in telemetry_rows if row.get("phase") in {"prefill", "decode"}]
+    datasets = sorted({str(row.get("dataset")) for row in phase_rows if row.get("dataset")})
+    if not datasets:
+        return
+
+    phase_specs = [
+        ("dcgm_sm_active", "gpu_util_pct", "DCGM SM active (%)", "DCGM SM Activity by Dataset: Prefill vs Decode"),
+        ("dcgm_dram_active", "memory_util_pct", "DCGM DRAM active (%)", "DCGM DRAM Activity by Dataset: Prefill vs Decode"),
+    ]
+    for prefix, value_key, ylabel, title in phase_specs:
+        for part_idx, dataset_chunk in enumerate(_chunks(datasets, 4), start=1):
+            fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
+            axes = axes.flatten()
+            chunk_plotted = False
+            for ax, dataset in zip(axes, dataset_chunk):
+                plotted = _plot_dcgm_phase_lines(ax, phase_rows, dataset, value_key, ylabel)
+                chunk_plotted = chunk_plotted or plotted
+                if not plotted:
+                    ax.axis("off")
+            for ax in axes[len(dataset_chunk):]:
+                ax.axis("off")
+            suffix = "" if len(datasets) <= 4 else f"_part{part_idx}"
+            if chunk_plotted:
+                fig.suptitle(title, fontsize=16)
+                fig.tight_layout(rect=(0, 0, 1, 0.96))
+                fig.savefig(results_dir / f"{prefix}_all_datasets_xlog{suffix}.png", dpi=180)
+            plt.close(fig)
+
+    for part_idx, dataset_chunk in enumerate(_chunks(datasets, 4), start=1):
+        fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
+        axes = axes.flatten()
+        chunk_plotted = False
+        for ax, dataset in zip(axes, dataset_chunk):
+            plotted = _plot_dcgm_vs_estimator_lines(ax, success, phase_rows, dataset)
+            chunk_plotted = chunk_plotted or plotted
+            if not plotted:
+                ax.axis("off")
+        for ax in axes[len(dataset_chunk):]:
+            ax.axis("off")
+        suffix = "" if len(datasets) <= 4 else f"_part{part_idx}"
+        if chunk_plotted:
+            fig.suptitle("S-MFU/S-MBU vs DCGM by Dataset: Estimator (solid) vs Telemetry (dashed)", fontsize=16)
+            fig.tight_layout(rect=(0, 0, 1, 0.96))
+            fig.savefig(results_dir / f"dcgm_vs_estimator_all_datasets_xlog{suffix}.png", dpi=180)
+        plt.close(fig)
+
+
+def _telemetry_points(subset: list[dict[str, Any]], slug: str, phase: str, value_key: str) -> list[tuple[int, float]]:
+    points = []
+    for row in subset:
+        if row.get("slug") != slug or row.get("phase") != phase:
+            continue
+        batch = int(row.get("batch_size") or 0)
+        value = row.get(value_key)
+        if batch <= 0 or value in ("", None):
+            continue
+        points.append((batch, float(value)))
+    return sorted(points)
+
+
+def _plot_dcgm_phase_lines(ax: Any, phase_rows: list[dict[str, Any]], dataset: str, value_key: str, ylabel: str) -> bool:
+    subset = [row for row in phase_rows if row.get("dataset") == dataset]
+    slugs = sorted({str(row.get("slug")) for row in subset if row.get("slug")})
+    plotted = False
+    for slug in slugs:
+        for phase, marker, phase_label in (("prefill", "o", "Prefill"), ("decode", "s", "Decode")):
+            points = _telemetry_points(subset, slug, phase, value_key)
+            if not points:
+                continue
+            label = phase_label if len(slugs) == 1 else f"{slug} {phase_label}"
+            ax.plot([point[0] for point in points], [point[1] for point in points], marker=marker, linewidth=2, label=label)
+            plotted = True
+    if plotted:
+        _style_dataset_axes(ax, dataset, subset, ylabel)
+    return plotted
+
+
+def _plot_dcgm_vs_estimator_lines(ax: Any, success: list[dict[str, Any]], phase_rows: list[dict[str, Any]], dataset: str) -> bool:
+    est_subset = [row for row in success if row.get("dataset") == dataset]
+    tel_subset = [row for row in phase_rows if row.get("dataset") == dataset]
+    slugs = sorted({str(row.get("slug")) for row in est_subset + tel_subset if row.get("slug")})
+    overlay_specs = [
+        ("prefill_smfu", "gpu_util_pct", "prefill", "o", "S-MFU", "DCGM SM"),
+        ("decoding_smbu", "memory_util_pct", "decode", "s", "S-MBU", "DCGM DRAM"),
+    ]
+    plotted = False
+    for slug in slugs:
+        est_rows = [row for row in est_subset if row.get("slug") == slug]
+        tel_rows = [row for row in tel_subset if row.get("slug") == slug]
+        for est_key, tel_key, phase, marker, est_label, tel_label in overlay_specs:
+            est_points = sorted(
+                (int(row.get("batch_size") or 0), _plot_value(row, est_key))
+                for row in est_rows
+                if int(row.get("batch_size") or 0) > 0
+            )
+            tel_points = _telemetry_points(tel_rows, slug, phase, tel_key)
+            label_prefix = f"{slug} " if len(slugs) > 1 else ""
+            if est_points:
+                ax.plot([point[0] for point in est_points], [point[1] for point in est_points], marker=marker, linewidth=2, label=f"{label_prefix}{est_label}")
+                plotted = True
+            if tel_points:
+                ax.plot([point[0] for point in tel_points], [point[1] for point in tel_points], marker=marker, linewidth=2, linestyle="--", label=f"{label_prefix}{tel_label}")
+                plotted = True
+    if plotted:
+        _style_dataset_axes(ax, dataset, est_subset + tel_subset, "Utilization (%)", legend_title="Source")
+    return plotted
+
+
+def _style_dataset_axes(ax: Any, dataset: str, subset: list[dict[str, Any]], ylabel: str, legend_title: str = "Phase") -> None:
+    ax.set_title(str(dataset).replace("_", " ").title())
+    ax.set_xscale("log", base=2)
+    batch_ticks = sorted({int(row.get("batch_size") or 0) for row in subset if int(row.get("batch_size") or 0) > 0})
+    if batch_ticks:
+        ax.set_xticks(batch_ticks)
+        ax.set_xticklabels([str(value) for value in batch_ticks])
+    ax.set_xlabel("Batch size (log2 scale)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, which="major", alpha=0.3)
+    ax.grid(True, which="minor", alpha=0.12)
+    ax.legend(title=legend_title, loc="best")
+
+
 def _remove_stale_plot_files(results_dir: Path) -> None:
     patterns = [
         "prefill_smfu_*.png",
@@ -335,6 +473,9 @@ def _remove_stale_plot_files(results_dir: Path) -> None:
         "latency_all_datasets_xlog*.png",
         "smfu_all_datasets_xlog*.png",
         "smbu_all_datasets_xlog*.png",
+        "dcgm_sm_active_all_datasets_xlog*.png",
+        "dcgm_dram_active_all_datasets_xlog*.png",
+        "dcgm_vs_estimator_all_datasets_xlog*.png",
     ]
     for pattern in patterns:
         for path in results_dir.glob(pattern):

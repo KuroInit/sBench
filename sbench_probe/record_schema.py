@@ -23,6 +23,7 @@ class ProbeRecord:
     per_req_info: list[dict[str, Any]] = field(default_factory=list)
     raw_forward_mode: str | None = None
     raw_probe_source: str = "timing_only"
+    ts: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

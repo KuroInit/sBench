@@ -2,9 +2,12 @@ import json
 import os
 import subprocess
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+import orchestrator
 
 from orchestrator import (
     Checkpoint,
@@ -20,14 +23,18 @@ from orchestrator import (
     required_forward_modes,
     resolved_num_gpus,
     run_signature,
+    run_sweep,
+    safe_model_leaf,
     server_startup_timeout,
     required_probe_records,
     start_sglang,
     sweep_plan,
     validate_config,
+    validate_dcgm_config,
     validate_probe_file,
     validate_request_results,
     workload_sglang_server_flags,
+    write_metadata,
 )
 
 
@@ -326,3 +333,117 @@ def test_start_sglang_deduplicates_tp_size_from_flags(monkeypatch):
     start_sglang({"id": "Qwen/Test", "tp": 2}, 8, 30000, {}, sglang_server_flags=[{"--tp-size": 4}])
     assert captured["cmd"].count("--tp-size") == 1
     assert captured["cmd"][captured["cmd"].index("--tp-size") + 1] == "4"
+
+
+class _RecorderSampler:
+    def __init__(self):
+        self.status = "dcgmi not found"
+        self.started = 0
+        self.stopped = 0
+        self._result = None
+
+    def start(self) -> bool:
+        self.started += 1
+        return True
+
+    def stop(self) -> dict:
+        """Idempotent like DcgmSampler.stop: repeated calls return the cached result."""
+        if self._result is None:
+            self._result = {"status": "stopped", "interval_ms": 100, "samples": 7}
+            self.stopped += 1
+        return self._result
+
+
+def _metadata_payload(leaf: Path, dataset: str) -> dict:
+    paths = sorted(leaf.glob(f"metadata_{dataset}_*.json"))
+    return json.loads(paths[-1].read_text())
+
+
+def test_write_metadata_includes_dcgm_telemetry_block(tmp_path):
+    write_metadata(
+        tmp_path,
+        "batched_prefill",
+        {"id": "Qwen/Test", "resolved_hf_config": {"model_type": "qwen2"}},
+        8,
+        {},
+        estimator_mode="component-wise",
+        telemetry={"status": "stopped", "samples": 7},
+    )
+    payload = _metadata_payload(tmp_path, "batched_prefill")
+    assert payload["telemetry"]["dcgm"] == {"status": "stopped", "samples": 7}
+
+
+def test_write_metadata_omits_telemetry_key_when_none(tmp_path):
+    write_metadata(
+        tmp_path,
+        "batched_prefill",
+        {"id": "Qwen/Test", "resolved_hf_config": {"model_type": "qwen2"}},
+        8,
+        {},
+        estimator_mode="component-wise",
+    )
+    payload = _metadata_payload(tmp_path, "batched_prefill")
+    assert "telemetry" not in payload
+
+
+def _sweep_config(dcgm_cfg: dict | None) -> dict:
+    config = {
+        "batch_sizes": [2],
+        "benchmark_types": {"prefill": ["batched_prefill"]},
+        "models": [{"id": "Qwen/Test", "slug": "qwen"}],
+    }
+    if dcgm_cfg is not None:
+        config["dcgm"] = dcgm_cfg
+    return config
+
+
+def test_validate_config_accepts_well_formed_dcgm_block():
+    validate_config(_sweep_config({"enabled": True, "interval_ms": 100, "fields": [1001, 1002]}))
+
+
+def test_validate_config_ignores_missing_dcgm_block():
+    validate_config(_sweep_config(None))
+
+
+def test_validate_config_rejects_bad_dcgm_interval_ms():
+    with pytest.raises(SystemExit, match="interval_ms"):
+        validate_config(_sweep_config({"interval_ms": 0}))
+
+
+def test_validate_config_rejects_bad_dcgm_fields():
+    with pytest.raises(SystemExit, match="fields"):
+        validate_config(_sweep_config({"fields": ["1001"]}))
+
+
+def test_run_sweep_starts_and_stops_dcgm_sampler_once_per_run(monkeypatch, tmp_path):
+    recorder = _RecorderSampler()
+    monkeypatch.setattr("sbench.dcgm.sampler_from_config", lambda cfg, out_path: recorder)
+    monkeypatch.setattr(orchestrator, "RESULTS_DIR", str(tmp_path))
+    monkeypatch.setattr(orchestrator, "load_model_configs", lambda models: ({"k": {"model_type": "qwen2"}}, {}))
+    monkeypatch.setattr(orchestrator, "model_config_cache_key", lambda model: "k")
+    monkeypatch.setattr(orchestrator, "run_signature", lambda *args, **kwargs: "sig")
+    monkeypatch.setattr(orchestrator, "load_dataset_config", lambda *args, **kwargs: {"benchmark_type": "prefill"})
+    monkeypatch.setattr(
+        orchestrator,
+        "start_sglang",
+        lambda *args, **kwargs: SimpleNamespace(poll=lambda: None),
+    )
+    monkeypatch.setattr(orchestrator, "wait_health", lambda port, proc, timeout=1500: True)
+    monkeypatch.setattr(orchestrator, "load_dataset", lambda *args, **kwargs: [{"prompt": "x"}])
+
+    async def fake_run_requests(*args, **kwargs):
+        return [{"success": True}]
+
+    monkeypatch.setattr(orchestrator, "run_requests", fake_run_requests)
+    monkeypatch.setattr(orchestrator, "write_request_results", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrator, "validate_request_results", lambda results, cfg: (True, ""))
+    monkeypatch.setattr(orchestrator, "validate_probe_file", lambda *args, **kwargs: (True, ""))
+    monkeypatch.setattr(orchestrator, "stop_process", lambda proc: None)
+
+    orchestrator.run_sweep(_sweep_config({"interval_ms": 100}), Checkpoint(str(tmp_path / "checkpoint.yaml")))
+
+    assert recorder.started == 1
+    assert recorder.stopped == 1
+    leaf = tmp_path / "qwen" / "bs2" / "batched_prefill" / safe_model_leaf("Qwen/Test")
+    payload = _metadata_payload(leaf, "batched_prefill")
+    assert payload["telemetry"]["dcgm"]["status"] == "stopped"

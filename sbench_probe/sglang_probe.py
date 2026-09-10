@@ -78,6 +78,7 @@ def build_probe_record(model_runner: Any, forward_batch: Any, output: Any, laten
         processed_tokens=processed if processed else None,
         per_req_info=per_req_info,
         raw_forward_mode=raw_mode,
+        ts=time.time(),
         raw_probe_source=source,
     )
 

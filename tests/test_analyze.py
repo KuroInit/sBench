@@ -1,3 +1,4 @@
+import csv
 import json
 import subprocess
 import sys
@@ -216,3 +217,56 @@ def test_write_plots_chunks_combined_smfu_smbu_images(tmp_path):
     assert (tmp_path / "latency_all_datasets_xlog_part1.png").exists()
     assert (tmp_path / "latency_all_datasets_xlog_part2.png").exists()
     assert not (tmp_path / "prefill_smbu_a.png").exists()
+
+
+def _dcgm_leaf(tmp_path):
+    leaf = tmp_path / "qwen" / "bs2" / "sharegpt" / "Model"
+    leaf.mkdir(parents=True)
+    meta = {
+        "model_config": {"model_name": "Qwen/Test", "precision": "bfloat16"},
+        "hardware": {"num_gpus": 1, "gpu_type": "NVIDIA-A100-SXM4-40GB"},
+        "hf_config": {"num_hidden_layers": 1, "hidden_size": 8, "num_attention_heads": 1, "head_dim": 8, "intermediate_size": 16},
+        "architecture_overrides": {},
+    }
+    (leaf / "metadata_sharegpt_1.json").write_text(json.dumps(meta))
+    ts = 1_700_000_000.0
+    records = [
+        {"forward_pass_id": 1, "forward_mode": "prefill", "latency": 1.0, "seq_lens_sum": 100, "batch_size": 1, "expert_activation": 0, "ts": ts + 1.0},
+        {"forward_pass_id": 2, "forward_mode": "decode", "latency": 0.5, "seq_lens_sum": 101, "batch_size": 1, "expert_activation": 0, "ts": ts + 2.0},
+    ]
+    (leaf / "server_records_sharegpt_1.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+    return leaf, ts
+
+
+def test_analyze_writes_telemetry_summary_and_plots(tmp_path):
+    leaf, ts = _dcgm_leaf(tmp_path)
+    (leaf / "dcgm_dmon_sharegpt_1.csv").write_text(
+        "ts,gpu_id,gr_engine_active,sm_active,sm_occupancy,pipe_tensor_active,dram_active\n"
+        f"{ts + 0.5},0,0.9,0.8,0.7,0.5,0.6\n"
+        f"{ts + 1.5},0,0.5,0.4,0.3,0.1,0.3\n"
+    )
+    env = os.environ.copy()
+    env.pop("ANALYZE_GPU_TYPE", None)
+    subprocess.check_call([sys.executable, str(Path(__file__).parents[1] / "analyze.py"), str(tmp_path)], env=env)
+    raw = (tmp_path / "raw_values.csv").read_text()
+    assert "prefill_smfu" in raw
+    assert "sharegpt" in raw
+    with (tmp_path / "telemetry_summary.csv").open(newline="") as handle:
+        telemetry = {row["phase"]: row for row in csv.DictReader(handle)}
+    assert set(telemetry) == {"prefill", "decode"}
+    assert telemetry["prefill"]["gpu_util_pct"] == "80.0"
+    assert telemetry["prefill"]["memory_util_pct"] == "60.0"
+    assert telemetry["decode"]["gpu_util_pct"] == "40.0"
+    assert telemetry["decode"]["memory_util_pct"] == "30.0"
+    for prefix in ["dcgm_sm_active", "dcgm_dram_active", "dcgm_vs_estimator"]:
+        assert (tmp_path / f"{prefix}_all_datasets_xlog.png").exists()
+
+
+def test_analyze_without_dcgm_csvs_omits_telemetry(tmp_path):
+    _dcgm_leaf(tmp_path)
+    env = os.environ.copy()
+    env.pop("ANALYZE_GPU_TYPE", None)
+    subprocess.check_call([sys.executable, str(Path(__file__).parents[1] / "analyze.py"), str(tmp_path)], env=env)
+    assert (tmp_path / "raw_values.csv").exists()
+    assert not (tmp_path / "telemetry_summary.csv").exists()
+    assert not list(tmp_path.glob("dcgm_*_all_datasets_xlog*.png"))
