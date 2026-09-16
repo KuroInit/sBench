@@ -1,4 +1,4 @@
-batch_sizes: [2, 4, 8, 16, 32, 64, 128]
+batch_sizes: [2]
 benchmark_types:
   prefill: []
   chat: [sharegpt]
@@ -48,9 +48,9 @@ models:
     sglang_server_flags:
       - --served-model-name: qwen3_32b
       - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --max-prefill-tokens: 16384
+      - --context-length: 8192
+      - --chunked-prefill-size: 8192
+      - --max-prefill-tokens: 8192
       - --mem-fraction-static: 0.90
 
   # Qwen3-30B-A3B: MoE. GQA-style transformer; active A3B-style sparse MoE.
@@ -60,9 +60,9 @@ models:
     sglang_server_flags:
       - --served-model-name: qwen3_30b_a3b
       - --dtype: bfloat16
-      - --context-length: 16384
-      - --chunked-prefill-size: 16384
-      - --max-prefill-tokens: 16384
+      - --context-length: 8192
+      - --chunked-prefill-size: 8192
+      - --max-prefill-tokens: 8192
       - --mem-fraction-static: 0.90
 
   # Qwen3.5-9B: Dense / non-MoE. Hybrid attention.
