@@ -7,10 +7,16 @@
 
 set -euo pipefail
 
-export BASE="${SBENCH_SERVER_BASE:-${HOME}/sbench_data}"
-export RUN_DIR="${BASE}/sbench"
+# Layout on this server: ~/ashwin/{sBench, hf_cache, ...}
+export BASE="${SBENCH_SERVER_BASE:-/export/home/yulin/ashwin}"
+export RUN_DIR="${BASE}/sbench-run"
 export REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export VENV_DIR="${RUN_DIR}/.venv"
+
+# Python environment: existing conda env (named ".venv" in miniforge3).
+# server_sweep.sh activates it via SBENCH_CONDA_BASE/etc/profile.d/conda.sh.
+export SBENCH_CONDA_ENV="${SBENCH_CONDA_ENV:-.venv}"
+export SBENCH_CONDA_BASE="${SBENCH_CONDA_BASE:-/export/home/yulin/miniforge3}"
 
 export HF_HOME="${BASE}/hf_cache"
 export HF_TOKEN="${HF_TOKEN:-REPLACE_WITH_YOUR_HF_TOKEN}"
