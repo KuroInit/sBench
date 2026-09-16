@@ -44,7 +44,7 @@ models:
   # Qwen3-32B: Dense / non-MoE. Standard Qwen3 GQA-style transformer; full attention.
   - id: Qwen/Qwen3-32B
     slug: qwen3_32b
-    tp: 4
+    tp: 2
     sglang_server_flags:
       - --served-model-name: qwen3_32b
       - --dtype: bfloat16
@@ -56,7 +56,7 @@ models:
   # Qwen3-30B-A3B: MoE. GQA-style transformer; active A3B-style sparse MoE.
   - id: Qwen/Qwen3-30B-A3B
     slug: qwen3_30b_a3b
-    tp: 4
+    tp: 2
     sglang_server_flags:
       - --served-model-name: qwen3_30b_a3b
       - --dtype: bfloat16
