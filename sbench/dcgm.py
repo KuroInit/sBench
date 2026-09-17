@@ -53,6 +53,12 @@ SHORT_NAME_TO_FIELD: dict[str, int] = {
     "pipe_fp64_active": 1006,
     "pipe_fp32_active": 1007,
     "pipe_fp16_active": 1008,
+    # Some DCGM versions abbreviate dmon column names to 5 letters.
+    "gract": 1001,
+    "smact": 1002,
+    "smocc": 1003,
+    "tenso": 1004,
+    "drama": 1005,
 }
 
 _PERCENT_ALIASES: dict[str, str] = {
