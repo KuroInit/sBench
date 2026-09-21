@@ -258,7 +258,7 @@ def _write_plots(results_dir: Path, rows: list[dict[str, Any]]) -> None:
     except Exception:
         return
 
-    _remove_stale_plot_files(results_dir)
+    _remove_stale_plot_files(results_dir, METRIC_PLOT_PATTERNS)
 
     success = [row for row in rows if row.get("run_status") == "success"]
     datasets = sorted({row.get("dataset") for row in success if row.get("dataset")})
@@ -336,7 +336,7 @@ def _write_telemetry_plots(results_dir: Path, rows: list[dict[str, Any]], teleme
     except Exception:
         return
 
-    _remove_stale_plot_files(results_dir)
+    _remove_stale_plot_files(results_dir, DCGM_PLOT_PATTERNS)
 
     success = [row for row in rows if row.get("run_status") == "success"]
     phase_rows = [row for row in telemetry_rows if row.get("phase") in {"prefill", "decode"}]
@@ -461,22 +461,26 @@ def _style_dataset_axes(ax: Any, dataset: str, subset: list[dict[str, Any]], yla
     ax.legend(title=legend_title, loc="best")
 
 
-def _remove_stale_plot_files(results_dir: Path) -> None:
-    patterns = [
-        "prefill_smfu_*.png",
-        "prefill_smbu_*.png",
-        "decoding_smfu_*.png",
-        "decoding_smbu_*.png",
-        "prefill_tokens_per_sec_*.png",
-        "decoding_tokens_per_sec_*.png",
-        "tokens_per_sec_all_datasets_xlog*.png",
-        "latency_all_datasets_xlog*.png",
-        "smfu_all_datasets_xlog*.png",
-        "smbu_all_datasets_xlog*.png",
-        "dcgm_sm_active_all_datasets_xlog*.png",
-        "dcgm_dram_active_all_datasets_xlog*.png",
-        "dcgm_vs_estimator_all_datasets_xlog*.png",
-    ]
+METRIC_PLOT_PATTERNS = [
+    "prefill_smfu_*.png",
+    "prefill_smbu_*.png",
+    "decoding_smfu_*.png",
+    "decoding_smbu_*.png",
+    "prefill_tokens_per_sec_*.png",
+    "decoding_tokens_per_sec_*.png",
+    "tokens_per_sec_all_datasets_xlog*.png",
+    "latency_all_datasets_xlog*.png",
+    "smfu_all_datasets_xlog*.png",
+    "smbu_all_datasets_xlog*.png",
+]
+DCGM_PLOT_PATTERNS = [
+    "dcgm_sm_active_all_datasets_xlog*.png",
+    "dcgm_dram_active_all_datasets_xlog*.png",
+    "dcgm_vs_estimator_all_datasets_xlog*.png",
+]
+
+
+def _remove_stale_plot_files(results_dir: Path, patterns: list[str]) -> None:
     for pattern in patterns:
         for path in results_dir.glob(pattern):
             try:

@@ -260,6 +260,11 @@ def test_analyze_writes_telemetry_summary_and_plots(tmp_path):
     assert telemetry["decode"]["memory_util_pct"] == "30.0"
     for prefix in ["dcgm_sm_active", "dcgm_dram_active", "dcgm_vs_estimator"]:
         assert (tmp_path / f"{prefix}_all_datasets_xlog.png").exists()
+    # Regression: the telemetry stale-plot cleanup once globbed the metric
+    # plot names too, deleting the S-MFU/S-MBU/throughput/latency graphs
+    # that _write_plots had written earlier in the same run.
+    for prefix in ["smfu", "smbu", "tokens_per_sec", "latency"]:
+        assert (tmp_path / f"{prefix}_all_datasets_xlog.png").exists()
 
 
 def test_analyze_without_dcgm_csvs_omits_telemetry(tmp_path):

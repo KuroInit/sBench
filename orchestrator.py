@@ -32,7 +32,10 @@ EXPERT_RECORDING_FLAGS = {
     "--expert-distribution-recorder-mode",
     "--enable-expert-distribution-metrics",
 }
-DEFAULT_MOE_PROBE_FLAGS = ("--enable-return-routed-experts",)
+DEFAULT_MOE_PROBE_FLAGS = (
+    "--enable-return-routed-experts",
+    "--enable-expert-distribution-metrics",
+)
 
 
 def main() -> None:
@@ -170,6 +173,8 @@ def run_sweep(config: dict[str, Any], checkpoint: "Checkpoint") -> None:
             else:
                 clear_failures(leaf_dir)
                 checkpoint.mark(slug, int(bs), dataset, "success", signature, model_id=model["id"])
+            if any(flag == "--enable-expert-distribution-metrics" for flag, _ in iter_sglang_server_flags(server_flags)):
+                dump_expert_distribution_record(port, dataset)
         except Exception as exc:
             write_failure(leaf_dir, dataset, model, int(bs), str(exc))
             checkpoint.mark(slug, int(bs), dataset, "failed", signature, str(exc), model["id"])
@@ -628,7 +633,7 @@ def write_metadata(
     payload = {
         "model_config": {"model_name": model["id"], "precision": model_precision(model, cfg)},
         "hardware": {"num_gpus": resolved_num_gpus(model, server_flags), "gpu_type": os.environ.get("SBENCH_GPU_TYPE", "unknown")},
-        "system_environment": {"batch_size": batch_size},
+        "system_environment": {"batch_size": batch_size, "sglang_version": _sglang_version()},
         "architecture_overrides": architecture_overrides(model, cfg),
         "estimator_mode": estimator_mode,
         "sglang_server_flags": server_flags,
@@ -859,6 +864,41 @@ class Checkpoint:
         self.entries.append(entry)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_yaml(self.path, {"completed": self.entries})
+
+
+def dump_expert_distribution_record(port: int, dataset: str) -> None:
+    """Ask the live SGLang server to write one expert-distribution dump.
+
+    sglang 0.5.9 writes expert_distribution_recorder_<ts>.pt into
+    SGLANG_EXPERT_DISTRIBUTION_RECORDER_DIR (results/expert_records per
+    scripts_server/env.sh). Best-effort: the probe records already carry
+    per-forward activation; this leaves a durable artifact in expert_records/.
+    """
+    try:
+        import urllib.request
+
+        url = f"http://127.0.0.1:{port}/dump_expert_distribution_record"
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            resp.read()
+    except Exception as exc:
+        print(f"[sweep] expert distribution dump failed for {dataset}: {exc}")
+
+
+def _sglang_version() -> str:
+    try:
+        import sglang
+
+        version = getattr(sglang, "__version__", None)
+        if version:
+            return str(version)
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version as package_version
+
+        return package_version("sglang")
+    except Exception:
+        return "unknown"
 
 
 def load_yaml(path: str) -> dict[str, Any]:

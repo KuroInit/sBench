@@ -32,7 +32,8 @@ def test_probe_builds_prefill_record_with_per_req_info():
     assert record.per_req_info[1]["is_last_chunk"] is True
 
 
-def test_probe_decode_without_expert_data_is_timing_only_but_analyzable():
+def test_probe_decode_without_expert_data_is_timing_only_but_analyzable(monkeypatch):
+    monkeypatch.setenv("SBENCH_NUM_EXPERTS", "128")
     runner = SimpleNamespace(forward_pass_id=8, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
     batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=400)
     record = build_probe_record(runner, batch, SimpleNamespace(), 0.1)
@@ -40,6 +41,15 @@ def test_probe_decode_without_expert_data_is_timing_only_but_analyzable():
     assert record.expert_activation == 0
     assert record.raw_probe_source == "timing_only"
     assert record.processed_tokens == 4
+
+
+def test_probe_dense_model_without_expert_data_is_labeled_non_moe(monkeypatch):
+    monkeypatch.delenv("SBENCH_NUM_EXPERTS", raising=False)
+    runner = SimpleNamespace(forward_pass_id=8, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=400)
+    record = build_probe_record(runner, batch, SimpleNamespace(), 0.1)
+    assert record.expert_activation == 0
+    assert record.raw_probe_source == "timing_only_non_moe"
 
 
 def test_probe_record_carries_completion_timestamp():
@@ -91,7 +101,8 @@ def test_probe_scales_fractional_expert_distribution_metric():
     assert record.expert_activation == 3.0
 
 
-def test_probe_does_not_treat_utilization_as_activation_count():
+def test_probe_does_not_treat_utilization_as_activation_count(monkeypatch):
+    monkeypatch.setenv("SBENCH_NUM_EXPERTS", "128")
     runner = SimpleNamespace(forward_pass_id=12, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
     batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=4, seq_lens_sum=80)
     metrics = SimpleNamespace(expert_utilization=0.4, num_experts=60)
@@ -193,3 +204,56 @@ def test_probe_error_writes_sidecar_log(tmp_path):
     append_probe_error(str(path), RuntimeError("probe broke"))
     error_path = tmp_path / "server_records.jsonl.errors.log"
     assert "RuntimeError: probe broke" in error_path.read_text()
+
+
+def _install_fake_expert_distribution_module(monkeypatch, recorder):
+    ed = ModuleType("sglang.srt.eplb.expert_distribution")
+    ed.get_global_expert_distribution_recorder = lambda: recorder
+    monkeypatch.setitem(sys.modules, "sglang", ModuleType("sglang"))
+    monkeypatch.setitem(sys.modules, "sglang.srt", ModuleType("sglang.srt"))
+    monkeypatch.setitem(sys.modules, "sglang.srt.eplb", ModuleType("sglang.srt.eplb"))
+    monkeypatch.setitem(sys.modules, "sglang.srt.eplb.expert_distribution", ed)
+
+
+def test_probe_extracts_native_metrics_via_recorder_dump(monkeypatch):
+    import torch
+
+    monkeypatch.setenv("SBENCH_NUM_EXPERTS", "128")
+    logical_count = torch.zeros((1, 24, 128), dtype=torch.int32)
+    logical_count[0, :, :4] = 1
+    dumps = []
+
+    class FakeRecorder:
+        recording = True
+
+        def dump_record(self, output_mode="file"):
+            dumps.append(output_mode)
+            return {"rank": 0, "logical_count": logical_count}
+
+    _install_fake_expert_distribution_module(monkeypatch, FakeRecorder())
+    # sglang 0.5.9 ModelRunnerOutput shape: metrics carries only
+    # eplb_balancedness; the activation comes from the recorder dump.
+    output = SimpleNamespace(expert_distribution_metrics=SimpleNamespace(eplb_balancedness=0.9))
+    runner = SimpleNamespace(forward_pass_id=14, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=2, seq_lens_sum=40)
+    record = build_probe_record(runner, batch, output, 0.2)
+    assert record.raw_probe_source == "recorder_dump"
+    assert record.expert_activation == 4.0
+    assert record.expert_utilization == 0.9
+    assert dumps == ["object"]
+
+
+def test_probe_skips_recorder_dump_when_recorder_not_recording(monkeypatch):
+    class FakeRecorder:
+        recording = False
+
+        def dump_record(self, output_mode="file"):
+            raise AssertionError("must not dump a stopped recorder")
+
+    _install_fake_expert_distribution_module(monkeypatch, FakeRecorder())
+    monkeypatch.setenv("SBENCH_NUM_EXPERTS", "128")
+    runner = SimpleNamespace(forward_pass_id=15, tp_size=1, pp_size=1, tp_rank=0, server_args=SimpleNamespace())
+    batch = SimpleNamespace(forward_mode=DecodeMode(), batch_size=2, seq_lens_sum=40)
+    record = build_probe_record(runner, batch, SimpleNamespace(), 0.2)
+    assert record.raw_probe_source == "timing_only"
+    assert record.expert_activation == 0

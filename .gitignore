@@ -19,6 +19,7 @@ env/
 *.secret
 *.token
 .headroom
+graphify-out/
 # Local notes / planning docs
 docs/
 

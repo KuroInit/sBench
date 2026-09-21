@@ -63,7 +63,8 @@ def build_probe_record(model_runner: Any, forward_batch: Any, output: Any, laten
     processed = sum(int(item.get("extend_len", 0)) for item in per_req_info) or _out_cache_tokens(forward_batch)
     if not processed and mode == "decode":
         processed = batch_size
-    activation, utilization, source = _extract_expert_activation(output, profiling_only=profiling_only)
+    moe_expected = os.environ.get("SBENCH_NUM_EXPERTS") is not None
+    activation, utilization, source = _extract_expert_activation(output, profiling_only=profiling_only, moe_expected=moe_expected)
     return ProbeRecord(
         forward_pass_id=int(getattr(model_runner, "forward_pass_id", 0) or 0),
         forward_mode=mode,
@@ -156,10 +157,14 @@ def _build_per_req_info(forward_batch: Any, server_args: Any) -> list[dict[str, 
     return rows
 
 
-def _extract_expert_activation(output: Any, *, profiling_only: bool) -> tuple[float, float | None, str]:
+def _extract_expert_activation(output: Any, *, profiling_only: bool, moe_expected: bool = True) -> tuple[float, float | None, str]:
     if profiling_only:
         return 0.0, None, "profiling_only"
     metrics = getattr(output, "expert_distribution_metrics", None)
+    # sglang 0.5.9 populates expert_distribution_metrics with
+    # ExpertDistributionMetrics(eplb_balancedness=...) only; it is a
+    # utilization signal, never an activation count.
+    utilization = _balancedness_utilization(metrics)
     if metrics is not None:
         activation = _field(
             metrics,
@@ -170,14 +175,16 @@ def _extract_expert_activation(output: Any, *, profiling_only: bool) -> tuple[fl
             "avg_expert_activation",
             "expert_activation",
         )
-        utilization = _field(metrics, "expert_utilization", "average_expert_utilization")
+        field_utilization = _field(metrics, "expert_utilization", "average_expert_utilization")
+        if field_utilization is not None:
+            utilization = float(field_utilization)
         num_experts = _num_experts_from(metrics)
         normalized = _normalize_activation_metric(activation, num_experts)
         if normalized is not None:
             source = "expert_distribution_metrics"
             if num_experts and 0 < float(activation) <= 1.0:
                 source = "expert_distribution_metrics_scaled"
-            return normalized, float(utilization) if utilization is not None else None, source
+            return normalized, utilization, source
     routed = getattr(output, "routed_experts_output", None)
     activation = _activation_from_routed_output(routed)
     if activation is not None:
@@ -188,8 +195,18 @@ def _extract_expert_activation(output: Any, *, profiling_only: bool) -> tuple[fl
         return activation, None, "indexer_topk_output"
     activation = _activation_from_recorder()
     if activation is not None:
-        return activation, None, "recorder_dump"
-    return 0.0, None, "timing_only"
+        return activation, utilization, "recorder_dump"
+    return 0.0, utilization, "timing_only" if moe_expected else "timing_only_non_moe"
+
+
+def _balancedness_utilization(metrics: Any) -> float | None:
+    balancedness = _field(metrics, "eplb_balancedness")
+    if balancedness is None:
+        return None
+    try:
+        return float(balancedness)
+    except (TypeError, ValueError):
+        return None
 
 
 def _activation_from_routed_output(value: Any) -> float | None:
@@ -286,7 +303,12 @@ def _flatten(value: Any) -> list[Any]:
 def _activation_from_recorder() -> float | None:
     try:
         from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
+
         recorder = get_global_expert_distribution_recorder()
+        # Noop recorders (recorder mode not enabled) and stopped recorders
+        # hold no counts; dumping them would yield zeros or raise.
+        if not getattr(recorder, "recording", False):
+            return None
         data = recorder.dump_record(output_mode="object")
     except Exception:
         return None
