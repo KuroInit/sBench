@@ -73,20 +73,28 @@ def prefill_context_mass(record: dict) -> int:
     return tokens * int(record.get("seq_lens_sum", 0))
 
 
+FA_KV_BLOCK = 128
+"""FlashAttention query-block size: context KV is re-read once per block."""
+
+
 def kv_read_units(arch: ArchitectureDescriptor, record: dict) -> float:
     """KV-cache elements READ this forward pass (not writes).
 
-    A decode pass reads the full context of every sequence in the batch
-    (``seq_lens_sum``), and a prefill pass reads each request's context KV
-    from HBM once (also ``seq_lens_sum``; per-token attention re-reads hit
-    cache/SRAM, not DRAM). Both are needed for an honest S-MBU: DCGM shows
-    decode DRAM-active ~58% while a writes-only cache term yields ~50% on the
-    same run. Written KV is counted separately by CacheComponent; this covers
-    the read side only.
+    Decode reads each sequence's full context once per pass
+    (``seq_lens_sum``). Prefill reads the written/context KV once
+    (``seq_lens_sum``) plus FlashAttention-style KV re-reads: every query
+    block re-reads the whole context, adding ``prefill_context_mass /
+    FA_KV_BLOCK`` token-visits per layer. Written KV is counted separately by
+    CacheComponent; this covers the read side only.
     """
 
+    per_token = CacheComponent().per_token_units(arch)
     tokens = int(record.get("seq_lens_sum", 0) or 0)
-    return max(tokens, 0) * CacheComponent().per_token_units(arch) / 1e12
+    reads = max(tokens, 0) * per_token
+    if record.get("forward_mode") == "prefill":
+        # FlashAttention re-reads context KV once per query block.
+        reads += prefill_context_mass(record) * per_token / FA_KV_BLOCK
+    return reads / 1e12
 
 
 class CacheComponent:
@@ -225,6 +233,25 @@ class MoEComponent:
         )
 
 
+class LMHeadComponent:
+    name = "lm_head"
+
+    def estimate(self, arch: ArchitectureDescriptor, record: dict) -> ComponentCost:
+        """Output-embedding (logits) GEMM: hidden x vocab MACs per token.
+
+        Every forward pass computes logits, so this term is real work the
+        layer-wise components miss. Weight bytes are read once per pass
+        (decode) or amortized across the packed tokens (prefill), matching the
+        per-token weight-read convention of the other components.
+        """
+
+        vocab = arch.vocab_size
+        if vocab <= 0 or arch.attention.hidden_size <= 0:
+            return ComponentCost(name=self.name)
+        units = arch.attention.hidden_size * vocab / 1e12
+        return ComponentCost(name=self.name, bandwidth_units=units, flops_units=units)
+
+
 class RouterComponent:
     name = "router"
 
@@ -256,6 +283,7 @@ DEFAULT_COMPONENTS: tuple[CostComponent, ...] = (
     DenseFFNComponent(),
     MoEComponent(),
     RouterComponent(),
+    LMHeadComponent(),
 )
 
 

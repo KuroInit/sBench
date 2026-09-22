@@ -222,7 +222,7 @@ def test_kv_read_units_scale_with_context_per_phase():
         "per_req_info": [{"extend_len": 10, "total_len": 100}, {"extend_len": 20, "total_len": 200}],
     }
     # Context KV is read from HBM once per pass regardless of phase.
-    assert kv_read_units(desc, prefill) == pytest.approx(300 * per_tok / 1e12)
+    assert kv_read_units(desc, prefill) == pytest.approx((300 * per_tok + (10 * 100 + 20 * 200) * per_tok / 128) / 1e12)
 
 
 def test_decode_smbu_counts_kv_reads_but_kv_size_does_not():

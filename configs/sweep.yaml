@@ -10,9 +10,14 @@ estimator_mode: component-wise
 
 # Concurrent DCGM hardware profiling (see README "DCGM Hardware Profiling").
 # Best-effort: runs proceed without telemetry when dcgmi is unavailable.
+# interval_ms 25: ~4x denser samples than the previous 100ms — short eval
+# runs (mmlu_pro decode) previously got only 28-68 telemetry samples. dmon
+# accepts down to 1ms; FI_PROF fields may internally update slower than the
+# requested interval, in which case repeated values are harmless (they are
+# time-weighted during phase attribution).
 dcgm:
   enabled: true
-  interval_ms: 100
+  interval_ms: 25
   fields: [1001, 1002, 1003, 1004, 1005]   # GR_ENGINE/SM_ACTIVE/SM_OCCUPANCY/TENSOR/DRAM
 
 # NSCC Singapore / Aspire2A defaults:

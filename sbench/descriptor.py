@@ -114,6 +114,7 @@ class RuntimeDescriptor:
 class ArchitectureDescriptor:
     model_name: str = ""
     model_type: str = "unknown"
+    vocab_size: int = 0
     attention: AttentionDescriptor = AttentionDescriptor()
     cache: CacheDescriptor = CacheDescriptor()
     ffn: FFNDescriptor = FFNDescriptor()
@@ -257,6 +258,7 @@ def descriptor_from_config(
             peak_bandwidth_tb=peak_bandwidth_tb,
             peak_flops_tf=peak_flops_tf,
         ),
+        vocab_size=as_int(deep_get(metric_cfg, "vocab_size")),
     )
     if isinstance(arch_override, Mapping):
         desc = apply_architecture_overrides(desc, arch_override)
@@ -264,6 +266,9 @@ def descriptor_from_config(
 
 
 def apply_architecture_overrides(desc: ArchitectureDescriptor, overrides: Mapping[str, Any]) -> ArchitectureDescriptor:
+    vocab_override = overrides.get("vocab_size")
+    if vocab_override is not None:
+        desc = replace(desc, vocab_size=as_int(vocab_override))
     return replace(
         desc,
         attention=_patch(desc.attention, overrides.get("attention")),

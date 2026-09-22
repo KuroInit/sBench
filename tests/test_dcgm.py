@@ -122,11 +122,14 @@ def test_aggregate_by_phase_joins_samples_to_windows():
         {"ts": t + 3.0, "gpu_id": 0, "sm_active": 0.1, "dram_active": 0.1},
     ]
     agg = dcgm.aggregate_by_phase(samples, windows)
-    assert agg["prefill"]["sm_active_mean"] == pytest.approx(0.7)
-    assert agg["prefill"]["dram_active_mean"] == pytest.approx(0.4)
+    # The sample at t+0.75 straddles the prefill window end (t+1.0): its
+    # interval [t+0.75, t+1.75) overlaps prefill for 0.25s and uncovered time
+    # after, so it contributes a 0.25-weighted observation to prefill.
+    assert agg["prefill"]["sm_active_mean"] == pytest.approx((0.8 * 1.0 + 0.6 * 0.25) / 1.25)
+    assert agg["prefill"]["dram_active_mean"] == pytest.approx((0.3 * 1.0 + 0.5 * 0.25) / 1.25)
     assert agg["prefill"]["samples"] == 2
-    assert agg["decode"]["sm_active_mean"] == pytest.approx(0.4)
-    assert agg["decode"]["samples"] == 1
+    assert agg["decode"]["sm_active_mean"] == pytest.approx((0.4 * 0.25 / 1.25 + 0.6 * 0.25 / 1.0) / (0.25 / 1.25 + 0.25 / 1.0))
+    assert agg["decode"]["samples"] == 2
 
 
 def test_telemetry_rows_for_run_schema(tmp_path):

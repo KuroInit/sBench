@@ -258,8 +258,10 @@ def test_analyze_writes_telemetry_summary_and_plots(tmp_path):
     assert telemetry["prefill"]["memory_util_pct"] == "60.0"
     assert telemetry["decode"]["gpu_util_pct"] == "40.0"
     assert telemetry["decode"]["memory_util_pct"] == "30.0"
-    for prefix in ["dcgm_sm_active", "dcgm_dram_active", "dcgm_vs_estimator"]:
+    for prefix in ["dcgm_sm_active", "dcgm_dram_active"]:
         assert (tmp_path / f"{prefix}_all_datasets_xlog.png").exists()
+    # dcgm_vs_estimator figures are split per dataset.
+    assert (tmp_path / "dcgm_vs_estimator_sharegpt_xlog.png").exists()
     # Regression: the telemetry stale-plot cleanup once globbed the metric
     # plot names too, deleting the S-MFU/S-MBU/throughput/latency graphs
     # that _write_plots had written earlier in the same run.

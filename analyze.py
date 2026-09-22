@@ -367,23 +367,7 @@ def _write_telemetry_plots(results_dir: Path, rows: list[dict[str, Any]], teleme
                 fig.savefig(results_dir / f"{prefix}_all_datasets_xlog{suffix}.png", dpi=180)
             plt.close(fig)
 
-    for part_idx, dataset_chunk in enumerate(_chunks(datasets, 4), start=1):
-        fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
-        axes = axes.flatten()
-        chunk_plotted = False
-        for ax, dataset in zip(axes, dataset_chunk):
-            plotted = _plot_dcgm_vs_estimator_lines(ax, success, phase_rows, dataset)
-            chunk_plotted = chunk_plotted or plotted
-            if not plotted:
-                ax.axis("off")
-        for ax in axes[len(dataset_chunk):]:
-            ax.axis("off")
-        suffix = "" if len(datasets) <= 4 else f"_part{part_idx}"
-        if chunk_plotted:
-            fig.suptitle("S-MFU/S-MBU vs DCGM by Dataset: Estimator (solid) vs Telemetry (dashed)", fontsize=16)
-            fig.tight_layout(rect=(0, 0, 1, 0.96))
-            fig.savefig(results_dir / f"dcgm_vs_estimator_all_datasets_xlog{suffix}.png", dpi=180)
-        plt.close(fig)
+    _plot_dcgm_vs_estimator_grid(success, phase_rows, datasets, results_dir)
 
 
 def _telemetry_points(subset: list[dict[str, Any]], slug: str, phase: str, value_key: str) -> list[tuple[int, float]]:
@@ -414,6 +398,128 @@ def _plot_dcgm_phase_lines(ax: Any, phase_rows: list[dict[str, Any]], dataset: s
     if plotted:
         _style_dataset_axes(ax, dataset, subset, ylabel)
     return plotted
+
+
+def _plot_metric_vs_dcgm_panel(
+    ax: Any,
+    success: list[dict[str, Any]],
+    phase_rows: list[dict[str, Any]],
+    dataset: str,
+    est_key: str,
+    tel_key: str,
+    phase: str,
+    marker: str,
+    est_label: str,
+    tel_label: str,
+    show_legend: bool = False,
+) -> bool:
+    """Plot one metric's estimator values against its DCGM counterpart for one phase.
+
+    Each panel isolates a single (metric, phase) pairing so a viewer can judge
+    alignment directly: estimator values are solid, DCGM values dashed, and
+    both series share one color per model. The panel title carries the mean
+    absolute gap in percentage points at the batch sizes both sides cover.
+    """
+
+    est_subset = [row for row in success if row.get("dataset") == dataset]
+    tel_subset = [row for row in phase_rows if row.get("dataset") == dataset]
+    slugs = sorted({str(row.get("slug")) for row in est_subset + tel_subset if row.get("slug")})
+    plotted = False
+    gaps: list[float] = []
+    for idx, slug in enumerate(slugs):
+        est_points = sorted(
+            (int(row.get("batch_size") or 0), _plot_value(row, est_key))
+            for row in est_subset
+            if row.get("slug") == slug and int(row.get("batch_size") or 0) > 0
+        )
+        tel_points = [
+            (b, v * 100 if tel_key.startswith("DCGM_FI_PROF_") else v)
+            for b, v in _telemetry_points(tel_subset, slug, phase, tel_key)
+        ]  # FI counters are 0-1 fractions; estimator metrics are in %
+        if est_points:
+            ax.plot(
+                [p[0] for p in est_points],
+                [p[1] for p in est_points],
+                marker=marker,
+                linewidth=2,
+                color=f"C{idx}",
+                label=f"{slug} {est_label} (solid = calculated)",
+            )
+            plotted = True
+        if tel_points:
+            ax.plot(
+                [p[0] for p in tel_points],
+                [p[1] for p in tel_points],
+                marker=marker,
+                linewidth=2,
+                linestyle="--",
+                alpha=0.85,
+                color=f"C{idx}",
+                label=f"{slug} {tel_label} (dashed = measured)",
+            )
+            plotted = True
+        est_at = dict(est_points)
+        tel_at = dict(tel_points)
+        gaps.extend(abs(est_at[b] - tel_at[b]) for b in sorted(set(est_at) & set(tel_at)))
+    if not plotted:
+        return False
+    phase_title = "Prefill" if phase == "prefill" else "Decode"
+    gap_note = f" | mean |gap| = {sum(gaps) / len(gaps):.1f} pp" if gaps else ""
+    _style_dataset_axes(ax, dataset, est_subset + tel_subset, "Utilization (%)", legend_title="Source", make_legend=False)
+    ax.set_title(f"{phase_title}: {est_label} vs {tel_label}{gap_note}", fontsize=10)
+    return True
+
+
+DCGM_VS_ESTIMATOR_PANELS = [
+    ("prefill_smfu", "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE", "prefill", "o", "S-MFU", "DCGM PIPE-TENSOR-active"),
+    ("decoding_smfu", "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE", "decode", "s", "S-MFU", "DCGM PIPE-TENSOR-active"),
+    ("prefill_smbu", "DCGM_FI_PROF_DRAM_ACTIVE", "prefill", "o", "S-MBU", "DCGM DRAM-active"),
+    ("decoding_smbu", "DCGM_FI_PROF_DRAM_ACTIVE", "decode", "s", "S-MBU", "DCGM DRAM-active"),
+]
+
+
+def _plot_dcgm_vs_estimator_grid(success: list[dict[str, Any]], phase_rows: list[dict[str, Any]], datasets: list[str], results_dir: Path) -> bool:
+    """Draw one figure per dataset with one panel per (metric, phase) pairing.
+
+    Each estimator metric is plotted next to its physical DCGM counterpart
+    (S-MFU vs SM-active, S-MBU vs DRAM-active) for the same phase, so a viewer
+    can judge alignment per panel instead of untangling mixed series. The mean
+    absolute gap at shared batch sizes is printed in each panel title.
+    """
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+    except Exception:
+        return False
+
+    _remove_stale_plot_files(results_dir, ["dcgm_vs_estimator_*_xlog*.png"])
+
+    plotted_any = False
+    for dataset in datasets:
+        fig, axes = plt.subplots(1, 4, figsize=(26, 5.2), sharex=False, sharey=False, squeeze=False)
+        chunk_plotted = False
+        for col_idx, (est_key, tel_key, phase, marker, est_label, tel_label) in enumerate(DCGM_VS_ESTIMATOR_PANELS):
+            ax = axes[0][col_idx]
+            if _plot_metric_vs_dcgm_panel(ax, success, phase_rows, dataset, est_key, tel_key, phase, marker, est_label, tel_label):
+                chunk_plotted = True
+            else:
+                ax.axis("off")
+        if chunk_plotted:
+            slugs = sorted({str(row.get("slug")) for row in success if row.get("dataset") == dataset})
+            handles = []
+            for idx, slug in enumerate(slugs):
+                handles.append(Line2D([], [], color=f"C{idx}", marker="s", linewidth=2, label=f"{slug} — calculated (solid)"))
+                handles.append(Line2D([], [], color=f"C{idx}", marker="s", linewidth=2, linestyle="--", label=f"{slug} — measured, DCGM (dashed)"))
+            fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.99), ncol=min(len(handles), 8), fontsize=9, frameon=False)
+            fig.suptitle(f"{dataset.replace('_', ' ').title()}: Estimator vs DCGM alignment", fontsize=15, y=1.075)
+            fig.tight_layout(rect=(0, 0, 1, 0.99))
+            fig.savefig(results_dir / f"dcgm_vs_estimator_{dataset}_xlog.png", dpi=180, bbox_inches="tight")
+            plotted_any = True
+        plt.close(fig)
+    return plotted_any
 
 
 def _plot_dcgm_vs_estimator_lines(ax: Any, success: list[dict[str, Any]], phase_rows: list[dict[str, Any]], dataset: str) -> bool:
@@ -447,7 +553,7 @@ def _plot_dcgm_vs_estimator_lines(ax: Any, success: list[dict[str, Any]], phase_
     return plotted
 
 
-def _style_dataset_axes(ax: Any, dataset: str, subset: list[dict[str, Any]], ylabel: str, legend_title: str = "Phase") -> None:
+def _style_dataset_axes(ax: Any, dataset: str, subset: list[dict[str, Any]], ylabel: str, legend_title: str = "Phase", make_legend: bool = True) -> None:
     ax.set_title(str(dataset).replace("_", " ").title())
     ax.set_xscale("log", base=2)
     batch_ticks = sorted({int(row.get("batch_size") or 0) for row in subset if int(row.get("batch_size") or 0) > 0})
@@ -458,7 +564,8 @@ def _style_dataset_axes(ax: Any, dataset: str, subset: list[dict[str, Any]], yla
     ax.set_ylabel(ylabel)
     ax.grid(True, which="major", alpha=0.3)
     ax.grid(True, which="minor", alpha=0.12)
-    ax.legend(title=legend_title, loc="best")
+    if make_legend:
+        ax.legend(title=legend_title, loc="best")
 
 
 METRIC_PLOT_PATTERNS = [
@@ -476,7 +583,7 @@ METRIC_PLOT_PATTERNS = [
 DCGM_PLOT_PATTERNS = [
     "dcgm_sm_active_all_datasets_xlog*.png",
     "dcgm_dram_active_all_datasets_xlog*.png",
-    "dcgm_vs_estimator_all_datasets_xlog*.png",
+    "dcgm_vs_estimator_*_xlog*.png",
 ]
 
 

@@ -407,33 +407,73 @@ def aggregate_by_phase(
     samples: Iterable[dict[str, Any]],
     windows: list[tuple[str, float, float]],
 ) -> dict[str, dict[str, float]]:
-    """Mean SM/DRAM/tensor activity per phase for samples inside phase windows.
+    """Phase-weighted mean SM/DRAM/tensor activity from probe-record windows.
 
-    Rows with multiple GPUs (TP>1) are averaged together; samples outside every
-    window (startup, idle gaps) are excluded from phase means.
+    Each sample is treated as covering the interval until the next sample's
+    timestamp. That interval is distributed across every overlapping forward
+    pass window in proportion to its overlap duration, so a sample straddling
+    a decode-to-prefill boundary contributes to both phases instead of being
+    misattributed to whichever single window contains its timestamp. Samples
+    outside every window (startup, idle gaps) contribute nothing. Rows with
+    multiple GPUs (TP>1) are averaged together; identical timestamps share
+    the same interval.
     """
-    starts = [start for _, start, _ in windows]
+
+    rows = sorted((s for s in samples if s.get("ts") is not None), key=lambda s: s["ts"])
+    if not rows or not windows:
+        return {}
+    unique_ts = sorted({float(r["ts"]) for r in rows})
+    intervals: dict[float, float] = {}
+    for i, ts in enumerate(unique_ts[:-1]):
+        intervals[ts] = unique_ts[i + 1] - ts
+
+    windows_sorted = sorted(windows, key=lambda w: (w[1], w[2]))
+    window_starts = [start for _, start, _ in windows_sorted]
+
+    def overlapping(ts: float, duration: float) -> list[tuple[str, float]]:
+        out: list[tuple[str, float]] = []
+        idx = max(bisect_right(window_starts, ts) - 1, 0)
+        for mode, start, end in windows_sorted[idx:]:
+            if start >= ts + duration:
+                break
+            overlap = min(end, ts + duration) - max(start, ts)
+            if overlap > 0:
+                out.append((mode, overlap / duration))
+        return out
+
     totals: dict[str, dict[str, list[float]]] = {}
+    weight_sums: dict[str, float] = {}
     counts: dict[str, int] = {}
-    for sample in samples:
-        ts = sample.get("ts")
-        if ts is None:
-            continue
-        idx = bisect_right(starts, ts) - 1
-        if idx < 0 or not (windows[idx][1] <= ts <= windows[idx][2]):
-            continue
-        phase = windows[idx][0]
-        counts[phase] = counts.get(phase, 0) + 1
-        bucket = totals.setdefault(phase, {})
-        for key, value in sample.items():
-            if key in {"ts", "gpu_id"} or not isinstance(value, (int, float)):
+    for row in rows:
+        ts = float(row["ts"])
+        duration = intervals.get(ts)
+        if duration is None or duration <= 0:
+            # Last sample (or duplicated ts): fall back to the window that
+            # contains the timestamp, if any.
+            idx = bisect_right(window_starts, ts) - 1
+            if idx < 0 or not (windows_sorted[idx][1] <= ts <= windows_sorted[idx][2]):
                 continue
-            bucket.setdefault(key, []).append(float(value))
+            weights = [(windows_sorted[idx][0], 1.0)]
+        else:
+            weights = overlapping(ts, duration)
+        for mode, weight in weights:
+            if weight <= 0:
+                continue
+            counts[mode] = counts.get(mode, 0) + 1
+            weight_sums[mode] = weight_sums.get(mode, 0.0) + weight
+            bucket = totals.setdefault(mode, {})
+            for key, value in row.items():
+                if key in {"ts", "gpu_id"} or not isinstance(value, (int, float)):
+                    continue
+                bucket.setdefault(key, []).append(float(value) * weight)
     out: dict[str, dict[str, float]] = {}
     for phase, values in totals.items():
+        total_weight = weight_sums.get(phase, 0.0)
+        if total_weight <= 0:
+            continue
         row: dict[str, float] = {}
         for key, nums in values.items():
-            row[f"{key}_mean"] = sum(nums) / len(nums)
+            row[f"{key}_mean"] = sum(nums) / total_weight
         row["samples"] = counts.get(phase, 0)
         out[phase] = row
     return out
