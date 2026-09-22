@@ -20,10 +20,8 @@ dcgm:
   interval_ms: 25
   fields: [1001, 1002, 1003, 1004, 1005]   # GR_ENGINE/SM_ACTIVE/SM_OCCUPANCY/TENSOR/DRAM
 
-# NSCC Singapore / Aspire2A defaults:
-# - scripts/nscc_env.sh sets SBENCH_GPU_TYPE/ANALYZE_GPU_TYPE to NVIDIA A100-SXM4-40GB.
-# - PBS currently requests 1 node with 4 GPUs, so selected models use tp: 4.
-# - Dense models use 16K context/chunked prefill settings.
+# Remote GPU server defaults (single node, 2 GPUs per model):
+# - All models run with tp: 2.
 sglang_server_flags:
   - --disable-custom-all-reduce
   - --disable-radix-cache
@@ -35,16 +33,16 @@ models:
   # Currently active: one MoE + one dense counterpart (Qwen3-30B-A3B, Qwen3-32B).
 
   # Qwen3-14B: Dense / non-MoE. Standard Qwen3 GQA-style transformer; full attention.
-  # - id: Qwen/Qwen3-14B
-  #   slug: qwen3_14b
-  #   tp: 4
-  #   sglang_server_flags:
-  #     - --served-model-name: qwen3_14b
-  #     - --dtype: bfloat16
-  #     - --context-length: 16384
-  #     - --chunked-prefill-size: 16384
-  #     - --max-prefill-tokens: 16384
-  #     - --mem-fraction-static: 0.90
+  - id: Qwen/Qwen3-14B
+    slug: qwen3_14b
+    tp: 2
+    sglang_server_flags:
+    - --served-model-name: qwen3_14b
+    - --dtype: bfloat16
+    - --context-length: 16384
+    - --chunked-prefill-size: 16384
+    - --max-prefill-tokens: 16384
+    - --mem-fraction-static: 0.90
 
   # Qwen3-32B: Dense / non-MoE. Standard Qwen3 GQA-style transformer; full attention.
   - id: Qwen/Qwen3-32B
@@ -71,45 +69,45 @@ models:
       - --mem-fraction-static: 0.90
 
   # Qwen3.5-9B: Dense / non-MoE. Hybrid attention.
-  # - id: Qwen/Qwen3.5-9B
-  #   slug: qwen3_5_9b
-  #   tp: 4
-  #   sglang_server_flags:
-  #     - --served-model-name: qwen3_5_9b
-  #     - --dtype: bfloat16
-  #     - --context-length: 16384
-  #     - --chunked-prefill-size: 16384
-  #     - --max-prefill-tokens: 16384
-  #     - --mem-fraction-static: 0.90
+  - id: Qwen/Qwen3.5-9B
+    slug: qwen3_5_9b
+    tp: 2
+    sglang_server_flags:
+    - --served-model-name: qwen3_5_9b
+    - --dtype: bfloat16
+    - --context-length: 16384
+    - --chunked-prefill-size: 16384
+    - --max-prefill-tokens: 16384
+    - --mem-fraction-static: 0.90
 
   # Qwen3.6-27B: Dense / non-MoE. Hybrid attention.
-  # - id: Qwen/Qwen3.6-27B
-  #   slug: qwen3_6_27b
-  #   tp: 4
-  #   sglang_server_flags:
-  #     - --served-model-name: qwen3_6_27b
-  #     - --dtype: bfloat16
-  #     - --context-length: 16384
-  #     - --chunked-prefill-size: 16384
-  #     - --max-prefill-tokens: 16384
-  #     - --mem-fraction-static: 0.90
+  - id: Qwen/Qwen3.6-27B
+    slug: qwen3_6_27b
+    tp: 2
+    sglang_server_flags:
+    - --served-model-name: qwen3_6_27b
+    - --dtype: bfloat16
+    - --context-length: 16384
+    - --chunked-prefill-size: 16384
+    - --max-prefill-tokens: 16384
+    - --mem-fraction-static: 0.90
 
   # Qwen3.6-35B-A3B: MoE. Hybrid attention; active A3B-style sparse MoE.
-  # - id: Qwen/Qwen3.6-35B-A3B
-  #   slug: qwen3_6_35b_a3b
-  #   tp: 4
-  #   sglang_server_flags:
-  #     - --served-model-name: qwen3_6_35b_a3b
-  #     - --dtype: bfloat16
-  #     - --context-length: 16384
-  #     - --chunked-prefill-size: 16384
-  #     - --max-prefill-tokens: 16384
-  #     - --mem-fraction-static: 0.90
+  - id: Qwen/Qwen3.6-35B-A3B
+    slug: qwen3_6_35b_a3b
+    tp: 2
+    sglang_server_flags:
+    - --served-model-name: qwen3_6_35b_a3b
+    - --dtype: bfloat16
+    - --context-length: 16384
+    - --chunked-prefill-size: 16384
+    - --max-prefill-tokens: 16384
+    - --mem-fraction-static: 0.90
 
   # Moonlight-16B-A3B: MoE. DeepSeek-V3-style MLA attention.
   # - id: moonshotai/Moonlight-16B-A3B
   #   slug: moonlight_16b_a3b
-  #   tp: 4
+  #   tp: 2
   #   sglang_server_flags:
   #     - --served-model-name: moonlight_16b_a3b
   #     - --dtype: bfloat16
