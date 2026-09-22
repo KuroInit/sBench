@@ -73,6 +73,22 @@ def prefill_context_mass(record: dict) -> int:
     return tokens * int(record.get("seq_lens_sum", 0))
 
 
+def kv_read_units(arch: ArchitectureDescriptor, record: dict) -> float:
+    """KV-cache elements READ this forward pass (not writes).
+
+    A decode pass reads the full context of every sequence in the batch
+    (``seq_lens_sum``), and a prefill pass reads each request's context KV
+    from HBM once (also ``seq_lens_sum``; per-token attention re-reads hit
+    cache/SRAM, not DRAM). Both are needed for an honest S-MBU: DCGM shows
+    decode DRAM-active ~58% while a writes-only cache term yields ~50% on the
+    same run. Written KV is counted separately by CacheComponent; this covers
+    the read side only.
+    """
+
+    tokens = int(record.get("seq_lens_sum", 0) or 0)
+    return max(tokens, 0) * CacheComponent().per_token_units(arch) / 1e12
+
+
 class CacheComponent:
     name = "cache"
 

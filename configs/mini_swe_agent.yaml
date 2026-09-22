@@ -8,10 +8,16 @@ precision: bfloat16
 target_output_tokens: 0
 num_samples: 200
 metric_sample_steps: 200
-# For profiling, materialize a small issue pool per concurrency point instead
+# Profiling, materialize a small issue pool per concurrency point instead
 # of running one issue for every nominal worker. This gives real multi-agent
 # load up to 8 concurrent SWE instances without risking 64 Singularity jobs.
 issue_count_from_batch_size: true
+# mini-swe-agent builds its writable Apptainer sandbox under TMPDIR; on NSCC
+# that resolves under /export and `apptainer exec --writable` cannot bind
+# /export into the SWE-bench images (no /export mount point), so every agent
+# command fails. The runner therefore defaults TMPDIR to /tmp for the
+# singularity environment class. Override here if the node has a better path:
+# sandbox_tmpdir: /tmp        # or "inherit" to keep the job's TMPDIR
 max_issue_count: 8
 max_workers: 8
 min_success_rate: 1.0

@@ -202,6 +202,61 @@ def test_estimator_keeps_short_prefill_records():
     assert len(records) == 1
 
 
+def test_kv_read_units_scale_with_context_per_phase():
+    from sbench.components import kv_read_units
+
+    desc = ArchitectureDescriptor(
+        attention=AttentionDescriptor(type="gqa", num_layers=2, hidden_size=16, num_attention_heads=2, num_key_value_heads=1, head_dim=8),
+        cache=CacheDescriptor(type="kv", num_layers=2, head_dim=8, num_key_value_heads=1),
+        ffn=FFNDescriptor(dense_layers=2, hidden_size=16, dense_intermediate_size=64),
+        runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
+    )
+    per_tok = 2 * 2 * 8 * 1  # 2 * layers * head_dim * kv_heads
+    decode = {"forward_mode": "decode", "batch_size": 4, "seq_lens_sum": 500, "processed_tokens": 4}
+    assert kv_read_units(desc, decode) == pytest.approx(500 * per_tok / 1e12)
+    prefill = {
+        "forward_mode": "prefill",
+        "batch_size": 2,
+        "processed_tokens": 30,
+        "seq_lens_sum": 300,
+        "per_req_info": [{"extend_len": 10, "total_len": 100}, {"extend_len": 20, "total_len": 200}],
+    }
+    # Context KV is read from HBM once per pass regardless of phase.
+    assert kv_read_units(desc, prefill) == pytest.approx(300 * per_tok / 1e12)
+
+
+def test_decode_smbu_counts_kv_reads_but_kv_size_does_not():
+    desc = ArchitectureDescriptor(
+        attention=AttentionDescriptor(type="gqa", num_layers=2, hidden_size=16, num_attention_heads=2, num_key_value_heads=1, head_dim=8),
+        cache=CacheDescriptor(type="kv", num_layers=2, head_dim=8, num_key_value_heads=1),
+        ffn=FFNDescriptor(dense_layers=2, hidden_size=16, dense_intermediate_size=64),
+        runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
+    )
+    shallow = estimate_records(desc, [{"forward_mode": "decode", "latency": 1.0, "batch_size": 2, "processed_tokens": 2, "seq_lens_sum": 8, "raw_probe_source": "timing_only"}])
+    deep = estimate_records(desc, [{"forward_mode": "decode", "latency": 1.0, "batch_size": 2, "processed_tokens": 2, "seq_lens_sum": 8000, "raw_probe_source": "timing_only"}])
+    # Same batch, same written KV -> same kv_size, but far more KV read traffic.
+    assert deep.kv_size == shallow.kv_size
+    assert deep.decoding_smbu > shallow.decoding_smbu
+
+
+def test_decode_smbu_formula_matches_hand_computed_kv_read_terms():
+    desc = ArchitectureDescriptor(
+        attention=AttentionDescriptor(type="gqa", num_layers=2, hidden_size=16, num_attention_heads=2, num_key_value_heads=1, head_dim=8),
+        cache=CacheDescriptor(type="kv", num_layers=2, head_dim=8, num_key_value_heads=1),
+        ffn=FFNDescriptor(dense_layers=2, hidden_size=16, dense_intermediate_size=64),
+        runtime=RuntimeDescriptor(precision_bytes=2, num_gpus=1, peak_bandwidth_tb=1, peak_flops_tf=1),
+    )
+    record = {"forward_mode": "decode", "latency": 1.0, "batch_size": 2, "processed_tokens": 2, "seq_lens_sum": 100, "raw_probe_source": "timing_only"}
+    result = estimate_records(desc, [record])
+    proj = 2 * (16 * (2 * 8 + 1 * 8 * 2) + 2 * 8 * 16) / 1e12  # attention projections
+    ffn = 2 * (64 * 3 * 16) / 1e12  # dense ffns
+    per_tok = 2 * 2 * 8 * 1  # KV elements per token
+    written = 2 * per_tok / 1e12  # batch tokens write KV
+    read = 100 * per_tok / 1e12  # context read every decode pass
+    expected_smbu = (proj + ffn + written + read) * 2 / 1.0 / (1 * 1)
+    assert result.decoding_smbu == pytest.approx(expected_smbu)
+
+
 def test_moe_cap_compatible_qwen_requires_real_activation():
     desc = ArchitectureDescriptor(
         model_name="Qwen/Qwen1.5-MoE-A2.7B-Chat",

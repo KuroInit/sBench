@@ -160,6 +160,38 @@ def test_configure_openai_env_overrides_inherited_cost_tracking():
     assert env["MSWEA_COST_TRACKING"] == "ignore_errors"
 
 
+def test_sandbox_tmpdir_defaults_to_tmp_for_singularity(monkeypatch):
+    from sbench.mini_swe_agent_runner import apply_sandbox_tmpdir
+
+    monkeypatch.delenv("SBENCH_MINI_SANDBOX_TMPDIR", raising=False)
+    env = {"TMPDIR": "/export/home/yulin/tmp"}
+    apply_sandbox_tmpdir(env, {"environment_class": "singularity"})
+    assert env["TMPDIR"] == "/tmp"
+    assert env["TMP"] == "/tmp" and env["TEMP"] == "/tmp"
+
+
+def test_sandbox_tmpdir_leaves_docker_alone_and_honors_overrides(monkeypatch):
+    from sbench.mini_swe_agent_runner import apply_sandbox_tmpdir
+
+    monkeypatch.delenv("SBENCH_MINI_SANDBOX_TMPDIR", raising=False)
+    docker_env = {"TMPDIR": "/export/home/yulin/tmp"}
+    apply_sandbox_tmpdir(docker_env, {"environment_class": "docker"})
+    assert docker_env["TMPDIR"] == "/export/home/yulin/tmp"
+
+    override_env = {}
+    apply_sandbox_tmpdir(override_env, {"environment_class": "docker", "sandbox_tmpdir": "/dev/shm/mswea"})
+    assert override_env["TMPDIR"] == "/dev/shm/mswea"
+
+    inherit_env = {"TMPDIR": "/export/home/yulin/tmp"}
+    apply_sandbox_tmpdir(inherit_env, {"environment_class": "singularity", "sandbox_tmpdir": "inherit"})
+    assert inherit_env["TMPDIR"] == "/export/home/yulin/tmp"
+
+    env_override = {}
+    monkeypatch.setenv("SBENCH_MINI_SANDBOX_TMPDIR", "/scratch/mswea")
+    apply_sandbox_tmpdir(env_override, {"environment_class": "docker"})
+    assert env_override["TMPDIR"] == "/scratch/mswea"
+
+
 def test_expected_prediction_count_honors_slice_extra_args():
     assert expected_prediction_count({"extra_args": ["--slice", "0:8"]}) == 8
     assert expected_prediction_count({"extra_args": ["--slice=23"]}) == 1

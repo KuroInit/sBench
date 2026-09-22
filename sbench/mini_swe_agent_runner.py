@@ -54,6 +54,7 @@ def run_mini_swe_agent(
     attempt_dir.mkdir(parents=True, exist_ok=False)
     openai_api_base = resolved_openai_api_base(api_base, dataset_cfg)
     configure_openai_env(mini_env, api_base, model_id, dataset_cfg)
+    apply_sandbox_tmpdir(mini_env, dataset_cfg)
     command = build_mini_swe_agent_command(
         model_id=model_id,
         batch_size=batch_size,
@@ -188,6 +189,35 @@ def mini_swe_local_model_config_args(dataset_cfg: dict[str, Any], openai_api_bas
 
 def resolved_openai_api_base(api_base: str, dataset_cfg: dict[str, Any]) -> str:
     return str(dataset_cfg.get("openai_api_base") or f"{api_base.rstrip('/')}/v1")
+
+
+def apply_sandbox_tmpdir(env: dict[str, str], dataset_cfg: dict[str, Any]) -> None:
+    """Point mini-SWE-agent's temp dir at a path that exists inside the container.
+
+    mini-swe-agent builds its writable sandbox under ``tempfile.gettempdir()``.
+    On HPC systems (e.g. NSCC) that resolves to a path under ``/export``, and
+    Apptainer then has to bind ``/export`` into the SWE-bench eval image when
+    running ``exec --writable <sandbox>``. Those images have no ``/export``
+    mount point and a ``--writable`` exec cannot auto-create one, so every
+    agent command fails with ``container creation failed`` and the run ends in
+    ``RepeatedFormatError`` with an empty ``model_patch``. Defaulting TMPDIR to
+    ``/tmp`` (present in every image) keeps the sandbox bindable; set
+    ``sandbox_tmpdir`` in the dataset config (or ``SBENCH_MINI_SANDBOX_TMPDIR``
+    in the environment) to override, or ``inherit`` to keep the inherited value.
+    """
+
+    requested = dataset_cfg.get("sandbox_tmpdir")
+    if requested is None:
+        requested = os.environ.get("SBENCH_MINI_SANDBOX_TMPDIR")
+    value = str(requested).strip() if requested is not None else ""
+    if value.lower() == "inherit":
+        return
+    if not value:
+        if str(dataset_cfg.get("environment_class", "docker")).lower() != "singularity":
+            return
+        value = "/tmp"
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        env[key] = value
 
 
 def configure_openai_env(env: dict[str, str], api_base: str, model_id: str, dataset_cfg: dict[str, Any]) -> None:

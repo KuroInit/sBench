@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from .components import DEFAULT_COMPONENTS, ComponentCost, CostComponent
+from .components import DEFAULT_COMPONENTS, ComponentCost, CostComponent, kv_read_units
 from .descriptor import ArchitectureDescriptor
 
 
@@ -44,6 +44,9 @@ def estimate_records(
         costs = estimate_component_breakdown(arch, record, components=comps)
         total = _total_cost(costs)
         kv_sizes.append(total.cache_units * 1e6)
+        # Count KV-cache reads (context) on top of written KV. Without this,
+        # decode S-MBU misses the dominant DRAM traffic of long-context decode.
+        total = total.plus(ComponentCost(name="kv_read", cache_units=kv_read_units(arch, record)))
         if record.get("forward_mode") == "prefill":
             throughput = int(record.get("seq_lens_sum", 0)) / latency
             ttfts.append(latency)
