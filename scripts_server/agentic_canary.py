@@ -63,6 +63,11 @@ def build_canary_config(
     if not model_id.strip():
         raise ValueError("model_id must not be empty")
     config = copy.deepcopy(source)
+    overrides = config.pop("model_overrides", {})
+    if isinstance(overrides, dict):
+        override = overrides.get(model_id)
+        if isinstance(override, dict):
+            config.update(copy.deepcopy(override))
     config["instance_ids"] = [instance_id]
     config["issue_count"] = 1
     config["workers"] = 1

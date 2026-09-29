@@ -133,6 +133,14 @@ def test_mini_swe_config_args_accepts_single_and_multiple_values():
     ]
 
 
+def test_mini_swe_config_args_resolve_repo_local_config_from_any_working_directory():
+    config = mini_swe_config_args({"mini_swe_config": "configs/mini_swe_agent_qwen_nonthinking.yaml"})
+
+    assert config == [
+        str(Path(__file__).parents[1] / "configs" / "mini_swe_agent_qwen_nonthinking.yaml")
+    ]
+
+
 def test_rejects_unknown_environment_class(tmp_path):
     with pytest.raises(ValueError, match="environment_class"):
         build_mini_swe_agent_command(model_id="Qwen/Test", batch_size=1, dataset_cfg={"environment_class": "podman"}, output_dir=tmp_path)

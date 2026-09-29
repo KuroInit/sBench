@@ -1,0 +1,8 @@
+# mini-SWE-agent forwards model_kwargs to litellm.completion. SGLang 0.5.9
+# accepts chat_template_kwargs on its OpenAI-compatible chat endpoint.
+# Disable Qwen3.5 hybrid thinking so the text-based agent receives its XML
+# action in message.content rather than consuming a reasoning-only turn.
+model:
+  model_kwargs:
+    chat_template_kwargs:
+      enable_thinking: false

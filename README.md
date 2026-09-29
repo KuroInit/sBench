@@ -201,9 +201,12 @@ match an ID returned by `/v1/models`. The script checks `/health` and
 `/v1/models`, then runs mini-SWE-agent on only the specified issue with one
 worker. It exits nonzero unless the run produces a valid non-empty
 `model_patch`. For Apptainer, the canary defaults the sandbox temporary
-directory to `/tmp`. Logs and predictions go under `results/agentic_canary/`;
-inspect them on failure before scaling up. A submitted patch proves only that
-the agent produced a patch, not that it solves the issue.
+directory to `/tmp`. For Qwen3.5/3.6 hybrid models, it also applies the
+model-specific non-thinking override: mini-SWE-agent parses visible XML
+actions from `content`, not SGLang's separate `reasoning_content`. Logs and
+predictions go under `results/agentic_canary/`; inspect them on failure before
+scaling up. A submitted patch proves only that the agent produced a patch, not
+that it solves the issue.
 
 ## Outputs
 

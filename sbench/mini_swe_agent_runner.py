@@ -172,7 +172,16 @@ def mini_swe_config_args(dataset_cfg: dict[str, Any]) -> list[str]:
             values.append(multiple)
         else:
             values.extend(multiple)
-    return [str(value) for value in values if str(value).strip()]
+    project_root = Path(__file__).resolve().parents[1]
+    configs = []
+    for value in values:
+        text = str(value).strip()
+        if not text:
+            continue
+        path = Path(text)
+        repo_path = project_root / path
+        configs.append(str(repo_path) if not path.is_absolute() and repo_path.is_file() else text)
+    return configs
 
 
 def mini_swe_local_model_config_args(dataset_cfg: dict[str, Any], openai_api_base: str | None) -> list[str]:

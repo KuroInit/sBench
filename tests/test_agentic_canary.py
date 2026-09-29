@@ -69,6 +69,29 @@ class BuildCanaryConfigTests(unittest.TestCase):
         self.assertEqual(config["mini_model_name"], "openai/qwen3_5_9b")
         self.assertEqual(source["instance_ids"], ["old__issue"])
 
+    def test_applies_served_model_override_before_constraining_canary(self):
+        source = {
+            "environment_class": "singularity",
+            "mini_swe_configs": ["swebench.yaml", "swebench_xml"],
+            "model_overrides": {
+                "qwen3_5_9b": {
+                    "mini_swe_configs": [
+                        "swebench.yaml",
+                        "swebench_xml",
+                        "configs/mini_swe_agent_qwen_nonthinking.yaml",
+                    ]
+                }
+            },
+        }
+
+        config = build_canary_config(source, "sqlfluff__sqlfluff-2419", "qwen3_5_9b")
+
+        self.assertEqual(
+            config["mini_swe_configs"],
+            ["swebench.yaml", "swebench_xml", "configs/mini_swe_agent_qwen_nonthinking.yaml"],
+        )
+        self.assertNotIn("model_overrides", config)
+
     def test_preserves_explicit_sandbox_directory_and_docker_class(self):
         source = {"environment_class": "docker", "sandbox_tmpdir": "/scratch/sandbox"}
 

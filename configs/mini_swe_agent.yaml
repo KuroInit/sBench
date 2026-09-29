@@ -34,6 +34,22 @@ mini_swe_configs:
   - swebench.yaml
   - swebench_xml
   - 'environment.exec_args=["--contain","--cleanenv"]'
+
+# Qwen3.5 hybrid models default to a thinking response. mini-SWE-agent's
+# text-action parser needs its XML action in the visible message content.
+model_overrides:
+  qwen3_5_9b:
+    mini_swe_configs:
+      - swebench.yaml
+      - swebench_xml
+      - 'environment.exec_args=["--contain","--cleanenv"]'
+      - configs/mini_swe_agent_qwen_nonthinking.yaml
+  qwen3_6_27b:
+    mini_swe_configs:
+      - swebench.yaml
+      - swebench_xml
+      - 'environment.exec_args=["--contain","--cleanenv"]'
+      - configs/mini_swe_agent_qwen_nonthinking.yaml
 extra_args: ["--redo-existing"]
 
 # Optional:
