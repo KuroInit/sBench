@@ -102,6 +102,7 @@ def main() -> None:
             "actual_batch_size_mean": batch_stats["mean"],
             "actual_batch_size_max": batch_stats["max"],
             "adapter": adapter.name,
+            "moe": adapter.descriptor.moe.enabled,
             "estimator": estimator_used,
             "prefill_tokens_per_sec": result.prefill_tp,
             "decoding_tokens_per_sec": result.decoding_throughput,
@@ -265,60 +266,87 @@ def _write_plots(results_dir: Path, rows: list[dict[str, Any]]) -> None:
     if not datasets:
         return
 
-    plot_specs = [
-        ("smbu", "S-MBU", "S-MBU (%)", "prefill_smbu", "decoding_smbu", "Prefill", "Decode"),
-        ("smfu", "S-MFU", "S-MFU (%)", "prefill_smfu", "decoding_smfu", "Prefill", "Decode"),
-        ("tokens_per_sec", "Throughput", "Tokens/sec", "prefill_tokens_per_sec", "decoding_tokens_per_sec", "Prefill", "Decode"),
-        ("latency", "Latency", "Latency (ms)", "ttft", "tpot", "TTFT", "TPOT"),
+    # Metric figures are split by architecture family: dense models report
+    # plain MFU/MBU while MoE models report the sparsity-aware S-MFU/S-MBU
+    # (MoE-CAP convention) — one quantity per family, never blended, and the
+    # per-family figures carry no DCGM overlay (only the dcgm_vs_estimator
+    # grid compares against DCGM, and only for MBU/S-MBU vs DRAM-active).
+    family_specs = [
+        (False, "dense", "MFU/MBU (dense)", "MFU", "MBU"),
+        (True, "moe", "S-MFU/S-MBU (MoE)", "S-MFU", "S-MBU"),
     ]
-    for prefix, title, ylabel, prefill_key, decode_key, prefill_phase, decode_phase in plot_specs:
-        for part_idx, dataset_chunk in enumerate(_chunks(datasets, 4), start=1):
-            fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
-            axes = axes.flatten()
-            for ax, dataset in zip(axes, dataset_chunk):
-                subset = [row for row in success if row.get("dataset") == dataset]
-                slugs = sorted({row.get("slug") for row in subset if row.get("slug")})
-                for slug in slugs:
-                    points = sorted(
-                        (
-                            int(row.get("batch_size") or 0),
-                            _plot_value(row, prefill_key),
-                            _plot_value(row, decode_key),
+    metric_specs = [
+        ("mbu", "prefill_smbu", "decoding_smbu", "Prefill", "Decode"),
+        ("mfu", "prefill_smfu", "decoding_smfu", "Prefill", "Decode"),
+        ("tokens_per_sec", "prefill_tokens_per_sec", "decoding_tokens_per_sec", "Prefill", "Decode"),
+        ("latency", "ttft", "tpot", "TTFT", "TPOT"),
+    ]
+    ylabel_by_metric = {
+        "mbu": ("MBU (%)", "S-MBU (%)"),
+        "mfu": ("MFU (%)", "S-MFU (%)"),
+        "tokens_per_sec": ("Tokens/sec", "Tokens/sec"),
+        "latency": ("Latency (ms)", "Latency (ms)"),
+    }
+    for is_moe, fam_key, fam_title, mfu_label, mbu_label in family_specs:
+        fam_rows = [row for row in success if bool(row.get("moe")) is is_moe]
+        if not fam_rows:
+            continue
+        fam_datasets = sorted({row.get("dataset") for row in fam_rows if row.get("dataset")})
+        title_metric = {
+            "mbu": mbu_label,
+            "mfu": mfu_label,
+            "tokens_per_sec": "Throughput",
+            "latency": "Latency",
+        }
+        for metric_key, prefill_key, decode_key, prefill_phase, decode_phase in metric_specs:
+            ylabel = ylabel_by_metric[metric_key][1 if is_moe else 0]
+            for part_idx, dataset_chunk in enumerate(_chunks(fam_datasets, 4), start=1):
+                fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
+                axes = axes.flatten()
+                for ax, dataset in zip(axes, dataset_chunk):
+                    subset = [row for row in fam_rows if row.get("dataset") == dataset]
+                    slugs = sorted({str(row.get("slug")) for row in subset if row.get("slug")})
+                    for slug in slugs:
+                        points = sorted(
+                            (
+                                int(row.get("batch_size") or 0),
+                                _plot_value(row, prefill_key),
+                                _plot_value(row, decode_key),
+                            )
+                            for row in subset
+                            if row.get("slug") == slug and int(row.get("batch_size") or 0) > 0
                         )
-                        for row in subset
-                        if row.get("slug") == slug and int(row.get("batch_size") or 0) > 0
-                    )
-                    if not points:
-                        continue
-                    batch = [point[0] for point in points]
-                    prefill = [point[1] for point in points]
-                    decode = [point[2] for point in points]
-                    if len(slugs) == 1:
-                        prefill_label = prefill_phase
-                        decode_label = decode_phase
-                    else:
-                        prefill_label = f"{slug} {prefill_phase}"
-                        decode_label = f"{slug} {decode_phase}"
-                    ax.plot(batch, prefill, marker="o", linewidth=2, label=prefill_label)
-                    ax.plot(batch, decode, marker="s", linewidth=2, label=decode_label)
-                ax.set_title(str(dataset).replace("_", " ").title())
-                ax.set_xscale("log", base=2)
-                batch_ticks = sorted({int(row.get("batch_size") or 0) for row in subset if int(row.get("batch_size") or 0) > 0})
-                if batch_ticks:
-                    ax.set_xticks(batch_ticks)
-                    ax.set_xticklabels([str(value) for value in batch_ticks])
-                ax.set_xlabel("Batch size (log2 scale)")
-                ax.set_ylabel(ylabel)
-                ax.grid(True, which="major", alpha=0.3)
-                ax.grid(True, which="minor", alpha=0.12)
-                ax.legend(title="Phase", loc="best")
-            for ax in axes[len(dataset_chunk):]:
-                ax.axis("off")
-            suffix = "" if len(datasets) <= 4 else f"_part{part_idx}"
-            fig.suptitle(f"{title} by Dataset: Prefill vs Decode", fontsize=16)
-            fig.tight_layout(rect=(0, 0, 1, 0.96))
-            fig.savefig(results_dir / f"{prefix}_all_datasets_xlog{suffix}.png", dpi=180)
-            plt.close(fig)
+                        if not points:
+                            continue
+                        batch = [point[0] for point in points]
+                        prefill = [point[1] for point in points]
+                        decode = [point[2] for point in points]
+                        if len(slugs) == 1:
+                            prefill_label = prefill_phase
+                            decode_label = decode_phase
+                        else:
+                            prefill_label = f"{slug} {prefill_phase}"
+                            decode_label = f"{slug} {decode_phase}"
+                        ax.plot(batch, prefill, marker="o", linewidth=2, label=prefill_label)
+                        ax.plot(batch, decode, marker="s", linewidth=2, label=decode_label)
+                    ax.set_title(str(dataset).replace("_", " ").title())
+                    ax.set_xscale("log", base=2)
+                    batch_ticks = sorted({int(row.get("batch_size") or 0) for row in subset if int(row.get("batch_size") or 0) > 0})
+                    if batch_ticks:
+                        ax.set_xticks(batch_ticks)
+                        ax.set_xticklabels([str(value) for value in batch_ticks])
+                    ax.set_xlabel("Batch size (log2 scale)")
+                    ax.set_ylabel(ylabel)
+                    ax.grid(True, which="major", alpha=0.3)
+                    ax.grid(True, which="minor", alpha=0.12)
+                    ax.legend(title="Phase", loc="best")
+                for ax in axes[len(dataset_chunk):]:
+                    ax.axis("off")
+                suffix = "" if len(fam_datasets) <= 4 else f"_part{part_idx}"
+                fig.suptitle(f"{title_metric[metric_key]} ({fam_title}) by Dataset: Prefill vs Decode", fontsize=16)
+                fig.tight_layout(rect=(0, 0, 1, 0.96))
+                fig.savefig(results_dir / f"{metric_key}_{fam_key}_all_datasets_xlog{suffix}.png", dpi=180)
+                plt.close(fig)
 
 
 def _plot_value(row: dict[str, Any], key: str) -> float:
@@ -344,28 +372,51 @@ def _write_telemetry_plots(results_dir: Path, rows: list[dict[str, Any]], teleme
     if not datasets:
         return
 
+    # DCGM figures follow the same dense/MoE split as the metric figures, so
+    # every figure shows one architecture family's models only.
+    fam_slugs = {
+        "dense": {str(row.get("slug")) for row in success if not bool(row.get("moe"))},
+        "moe": {str(row.get("slug")) for row in success if bool(row.get("moe"))},
+    }
+    base_titles = {
+        "dense": {
+            "dcgm_sm_active": "DCGM SM Activity (dense) by Dataset: Prefill vs Decode",
+            "dcgm_dram_active": "DCGM DRAM Activity (dense) by Dataset: Prefill vs Decode",
+        },
+        "moe": {
+            "dcgm_sm_active": "DCGM SM Activity (MoE) by Dataset: Prefill vs Decode",
+            "dcgm_dram_active": "DCGM DRAM Activity (MoE) by Dataset: Prefill vs Decode",
+        },
+    }
     phase_specs = [
-        ("dcgm_sm_active", "gpu_util_pct", "DCGM SM active (%)", "DCGM SM Activity by Dataset: Prefill vs Decode"),
-        ("dcgm_dram_active", "memory_util_pct", "DCGM DRAM active (%)", "DCGM DRAM Activity by Dataset: Prefill vs Decode"),
+        ("dcgm_sm_active", "gpu_util_pct", "DCGM SM active (%)"),
+        ("dcgm_dram_active", "memory_util_pct", "DCGM DRAM active (%)"),
     ]
-    for prefix, value_key, ylabel, title in phase_specs:
-        for part_idx, dataset_chunk in enumerate(_chunks(datasets, 4), start=1):
-            fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
-            axes = axes.flatten()
-            chunk_plotted = False
-            for ax, dataset in zip(axes, dataset_chunk):
-                plotted = _plot_dcgm_phase_lines(ax, phase_rows, dataset, value_key, ylabel)
-                chunk_plotted = chunk_plotted or plotted
-                if not plotted:
+    for fam_key in ("dense", "moe"):
+        fam_slug_set = fam_slugs[fam_key]
+        fam_phase_rows = [row for row in phase_rows if str(row.get("slug")) in fam_slug_set]
+        fam_datasets = sorted({str(row.get("dataset")) for row in fam_phase_rows if row.get("dataset")})
+        if not fam_datasets:
+            continue
+        for prefix, value_key, ylabel in phase_specs:
+            title = base_titles[fam_key][prefix]
+            for part_idx, dataset_chunk in enumerate(_chunks(fam_datasets, 4), start=1):
+                fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=False, sharey=False)
+                axes = axes.flatten()
+                chunk_plotted = False
+                for ax, dataset in zip(axes, dataset_chunk):
+                    plotted = _plot_dcgm_phase_lines(ax, fam_phase_rows, dataset, value_key, ylabel)
+                    chunk_plotted = chunk_plotted or plotted
+                    if not plotted:
+                        ax.axis("off")
+                for ax in axes[len(dataset_chunk):]:
                     ax.axis("off")
-            for ax in axes[len(dataset_chunk):]:
-                ax.axis("off")
-            suffix = "" if len(datasets) <= 4 else f"_part{part_idx}"
-            if chunk_plotted:
-                fig.suptitle(title, fontsize=16)
-                fig.tight_layout(rect=(0, 0, 1, 0.96))
-                fig.savefig(results_dir / f"{prefix}_all_datasets_xlog{suffix}.png", dpi=180)
-            plt.close(fig)
+                suffix = "" if len(fam_datasets) <= 4 else f"_part{part_idx}"
+                if chunk_plotted:
+                    fig.suptitle(title, fontsize=16)
+                    fig.tight_layout(rect=(0, 0, 1, 0.96))
+                    fig.savefig(results_dir / f"{prefix}_{fam_key}_all_datasets_xlog{suffix}.png", dpi=180)
+                plt.close(fig)
 
     _plot_dcgm_vs_estimator_grid(success, phase_rows, datasets, results_dir)
 
@@ -471,19 +522,19 @@ def _plot_metric_vs_dcgm_panel(
 
 
 DCGM_VS_ESTIMATOR_PANELS = [
-    ("prefill_smfu", "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE", "prefill", "o", "S-MFU", "DCGM PIPE-TENSOR-active"),
-    ("decoding_smfu", "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE", "decode", "s", "S-MFU", "DCGM PIPE-TENSOR-active"),
-    ("prefill_smbu", "DCGM_FI_PROF_DRAM_ACTIVE", "prefill", "o", "S-MBU", "DCGM DRAM-active"),
-    ("decoding_smbu", "DCGM_FI_PROF_DRAM_ACTIVE", "decode", "s", "S-MBU", "DCGM DRAM-active"),
+    ("prefill_smbu", "DCGM_FI_PROF_DRAM_ACTIVE", "prefill", "o", "MBU", "DCGM DRAM-active"),
+    ("decoding_smbu", "DCGM_FI_PROF_DRAM_ACTIVE", "decode", "s", "MBU", "DCGM DRAM-active"),
 ]
 
 
 def _plot_dcgm_vs_estimator_grid(success: list[dict[str, Any]], phase_rows: list[dict[str, Any]], datasets: list[str], results_dir: Path) -> bool:
     """Draw one figure per dataset with one panel per (metric, phase) pairing.
 
-    Each estimator metric is plotted next to its physical DCGM counterpart
-    (S-MFU vs SM-active, S-MBU vs DRAM-active) for the same phase, so a viewer
-    can judge alignment per panel instead of untangling mixed series. The mean
+    Only MBU is plotted against its DCGM counterpart (DRAM-active), the one
+    like-for-like pairing: both sides measure per-pass HBM traffic demand.
+    MFU has no DCGM counterpart (DCGM exposes only cycle-activity ratios,
+    never FLOPs), so MFU-vs-counter panels would fabricate a discrepancy
+    out of counter semantics — they are deliberately omitted. The mean
     absolute gap at shared batch sizes is printed in each panel title.
     """
 
@@ -527,8 +578,7 @@ def _plot_dcgm_vs_estimator_lines(ax: Any, success: list[dict[str, Any]], phase_
     tel_subset = [row for row in phase_rows if row.get("dataset") == dataset]
     slugs = sorted({str(row.get("slug")) for row in est_subset + tel_subset if row.get("slug")})
     overlay_specs = [
-        ("prefill_smfu", "gpu_util_pct", "prefill", "o", "S-MFU", "DCGM SM"),
-        ("decoding_smbu", "memory_util_pct", "decode", "s", "S-MBU", "DCGM DRAM"),
+        ("decoding_smbu", "memory_util_pct", "decode", "s", "MBU", "DCGM DRAM"),
     ]
     plotted = False
     for slug in slugs:
@@ -575,6 +625,14 @@ METRIC_PLOT_PATTERNS = [
     "decoding_smbu_*.png",
     "prefill_tokens_per_sec_*.png",
     "decoding_tokens_per_sec_*.png",
+    "mbu_dense_all_datasets_xlog*.png",
+    "mfu_dense_all_datasets_xlog*.png",
+    "mbu_moe_all_datasets_xlog*.png",
+    "mfu_moe_all_datasets_xlog*.png",
+    "tokens_per_sec_dense_all_datasets_xlog*.png",
+    "tokens_per_sec_moe_all_datasets_xlog*.png",
+    "latency_dense_all_datasets_xlog*.png",
+    "latency_moe_all_datasets_xlog*.png",
     "tokens_per_sec_all_datasets_xlog*.png",
     "latency_all_datasets_xlog*.png",
     "smfu_all_datasets_xlog*.png",
@@ -583,6 +641,10 @@ METRIC_PLOT_PATTERNS = [
 DCGM_PLOT_PATTERNS = [
     "dcgm_sm_active_all_datasets_xlog*.png",
     "dcgm_dram_active_all_datasets_xlog*.png",
+    "dcgm_sm_active_dense_all_datasets_xlog*.png",
+    "dcgm_sm_active_moe_all_datasets_xlog*.png",
+    "dcgm_dram_active_dense_all_datasets_xlog*.png",
+    "dcgm_dram_active_moe_all_datasets_xlog*.png",
     "dcgm_vs_estimator_*_xlog*.png",
 ]
 

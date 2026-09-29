@@ -184,6 +184,27 @@ it. Because the host daemon interprets bind-mount paths on the host, set
 container. On HPC systems without Docker socket access, keep using
 `environment_class: singularity`.
 
+### Agentic canary (before a full sweep)
+
+With the SGLang server running on the remote machine, test connectivity and
+one real SWE-bench issue before starting the sweep:
+
+```bash
+python scripts_server/agentic_canary.py \
+  --api-base http://127.0.0.1:30000 \
+  --model-id qwen3_5_9b \
+  --instance-id sqlfluff__sqlfluff-2419
+```
+
+`--api-base` is the server root URL (not `/v1`); `--model-id` must exactly
+match an ID returned by `/v1/models`. The script checks `/health` and
+`/v1/models`, then runs mini-SWE-agent on only the specified issue with one
+worker. It exits nonzero unless the run produces a valid non-empty
+`model_patch`. For Apptainer, the canary defaults the sandbox temporary
+directory to `/tmp`. Logs and predictions go under `results/agentic_canary/`;
+inspect them on failure before scaling up. A submitted patch proves only that
+the agent produced a patch, not that it solves the issue.
+
 ## Outputs
 
 ```text

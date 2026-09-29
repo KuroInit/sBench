@@ -186,36 +186,37 @@ def test_prefill_analysis_requires_only_prefill_phase():
     assert analyze._missing_metric_modes(records, {"dataset_config": {"benchmark_type": "chat"}}, "sharegpt") == ["decode"]
 
 
-def test_write_plots_chunks_combined_smfu_smbu_images(tmp_path):
+def test_write_plots_splits_dense_and_moe_metric_images(tmp_path):
     import analyze
 
     rows = []
-    for dataset in ["a", "b", "c", "d", "e"]:
-        for batch in [2, 4]:
-            rows.append({
-                "run_status": "success",
-                "dataset": dataset,
-                "slug": "model",
-                "batch_size": batch,
-                "prefill_smbu": 10 + batch,
-                "decoding_smbu": 20 + batch,
-                "prefill_smfu": 1 + batch,
-                "decoding_smfu": 2 + batch,
-                "prefill_tokens_per_sec": 100 + batch,
-                "decoding_tokens_per_sec": 50 + batch,
-                "ttft": 0.1 + batch / 1000,
-                "tpot": 0.01 + batch / 1000,
-            })
+    for moe in [False, True]:
+        for dataset in ["a", "b", "c", "d", "e"]:
+            for batch in [2, 4]:
+                rows.append({
+                    "run_status": "success",
+                    "dataset": dataset,
+                    "slug": "model",
+                    "batch_size": batch,
+                    "moe": moe,
+                    "prefill_smbu": 10 + batch,
+                    "decoding_smbu": 20 + batch,
+                    "prefill_smfu": 1 + batch,
+                    "decoding_smfu": 2 + batch,
+                    "prefill_tokens_per_sec": 100 + batch,
+                    "decoding_tokens_per_sec": 50 + batch,
+                    "ttft": 0.1 + batch / 1000,
+                    "tpot": 0.01 + batch / 1000,
+                })
     (tmp_path / "prefill_smbu_a.png").write_text("stale")
     analyze._write_plots(tmp_path, rows)
-    assert (tmp_path / "smbu_all_datasets_xlog_part1.png").exists()
-    assert (tmp_path / "smbu_all_datasets_xlog_part2.png").exists()
-    assert (tmp_path / "smfu_all_datasets_xlog_part1.png").exists()
-    assert (tmp_path / "smfu_all_datasets_xlog_part2.png").exists()
-    assert (tmp_path / "tokens_per_sec_all_datasets_xlog_part1.png").exists()
-    assert (tmp_path / "tokens_per_sec_all_datasets_xlog_part2.png").exists()
-    assert (tmp_path / "latency_all_datasets_xlog_part1.png").exists()
-    assert (tmp_path / "latency_all_datasets_xlog_part2.png").exists()
+    # Per-family metric figures: dense and MoE are never blended.
+    for family in ["dense", "moe"]:
+        for metric in ["mbu", "mfu", "tokens_per_sec", "latency"]:
+            assert (tmp_path / f"{metric}_{family}_all_datasets_xlog_part1.png").exists()
+            assert (tmp_path / f"{metric}_{family}_all_datasets_xlog_part2.png").exists()
+    # Combined per-metric figure names are no longer produced.
+    assert not (tmp_path / "smbu_all_datasets_xlog_part1.png").exists()
     assert not (tmp_path / "prefill_smbu_a.png").exists()
 
 
@@ -258,15 +259,17 @@ def test_analyze_writes_telemetry_summary_and_plots(tmp_path):
     assert telemetry["prefill"]["memory_util_pct"] == "60.0"
     assert telemetry["decode"]["gpu_util_pct"] == "40.0"
     assert telemetry["decode"]["memory_util_pct"] == "30.0"
-    for prefix in ["dcgm_sm_active", "dcgm_dram_active"]:
+    for prefix in ["dcgm_sm_active_dense", "dcgm_dram_active_dense"]:
         assert (tmp_path / f"{prefix}_all_datasets_xlog.png").exists()
     # dcgm_vs_estimator figures are split per dataset.
     assert (tmp_path / "dcgm_vs_estimator_sharegpt_xlog.png").exists()
     # Regression: the telemetry stale-plot cleanup once globbed the metric
-    # plot names too, deleting the S-MFU/S-MBU/throughput/latency graphs
-    # that _write_plots had written earlier in the same run.
-    for prefix in ["smfu", "smbu", "tokens_per_sec", "latency"]:
-        assert (tmp_path / f"{prefix}_all_datasets_xlog.png").exists()
+    # plot names too, deleting the per-family metric graphs that _write_plots
+    # had written earlier in the same run. The synthetic leaf is dense-only,
+    # so only dense-family figures exist here.
+    for metric in ["mbu", "mfu", "tokens_per_sec", "latency"]:
+        assert (tmp_path / f"{metric}_dense_all_datasets_xlog.png").exists()
+        assert not (tmp_path / f"{metric}_moe_all_datasets_xlog.png").exists()
 
 
 def test_analyze_without_dcgm_csvs_omits_telemetry(tmp_path):
