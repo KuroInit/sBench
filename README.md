@@ -152,7 +152,7 @@ model_class: litellm_textbased
 mini_swe_configs:
   - swebench.yaml
   - swebench_xml
-  - 'environment.exec_args=["--contain","--cleanenv"]'
+  - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd"]'
 ```
 
 The orchestrator starts the local SGLang server, points mini-SWE-agent at
@@ -165,8 +165,10 @@ can emit textual action blocks instead of native OpenAI `tool_calls`; set
 `model_class: litellm_textbased` with `mini_swe_configs: ["swebench.yaml",
 "swebench_xml"]` or another matching text parser config.
 On clusters without Singularity fakeroot mappings, include the
-`environment.exec_args=["--contain","--cleanenv"]` override so task commands do
-not fail on `/etc/subuid`.
+`environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd"]`
+override. It prevents configured host binds and the automatic CWD bind—often
+under `/export` on HPC—from breaking a writable SWE-bench sandbox when the
+image lacks that destination.
 
 Batch-mode mini-SWE-agent writes `preds.json`. sBench requires one nonempty
 `model_patch` submission per selected issue before accepting the run. This
@@ -200,10 +202,12 @@ python scripts_server/agentic_canary.py \
 match an ID returned by `/v1/models`. The script checks `/health` and
 `/v1/models`, then runs mini-SWE-agent on only the specified issue with one
 worker. It exits nonzero unless the run produces a valid non-empty
-`model_patch`. For Apptainer, the canary defaults the sandbox temporary
-directory to `/tmp`. For Qwen3.5/3.6 hybrid models, it also applies the
-model-specific non-thinking override: mini-SWE-agent parses visible XML
-actions from `content`, not SGLang's separate `reasoning_content`. Logs and
+`model_patch`. For the Singularity environment, the canary builds its sandbox
+under `/tmp`, runs mini-SWE-agent from `/tmp`, clears inherited
+Apptainer/Singularity bind variables, and disables configured and automatic CWD
+binds. For Qwen3.5/3.6 hybrid models, it also applies the model-specific
+non-thinking override: mini-SWE-agent parses visible XML actions from
+`content`, not SGLang's separate `reasoning_content`. Logs and
 predictions go under `results/agentic_canary/`; inspect them on failure before
 scaling up. A submitted patch proves only that the agent produced a patch, not
 that it solves the issue.

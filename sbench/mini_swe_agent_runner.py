@@ -56,6 +56,7 @@ def run_mini_swe_agent(
     openai_api_base = resolved_openai_api_base(api_base, dataset_cfg)
     configure_openai_env(mini_env, api_base, model_id, dataset_cfg)
     apply_sandbox_tmpdir(mini_env, dataset_cfg)
+    clear_apptainer_bind_env(mini_env, dataset_cfg)
     command = build_mini_swe_agent_command(
         model_id=model_id,
         batch_size=batch_size,
@@ -70,6 +71,7 @@ def run_mini_swe_agent(
         with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
             proc = subprocess.Popen(
                 command,
+                cwd=mini_swe_working_directory(dataset_cfg),
                 env=mini_env,
                 stdout=stdout,
                 stderr=stderr,
@@ -206,18 +208,17 @@ def resolved_openai_api_base(api_base: str, dataset_cfg: dict[str, Any]) -> str:
 
 
 def apply_sandbox_tmpdir(env: dict[str, str], dataset_cfg: dict[str, Any]) -> None:
-    """Point mini-SWE-agent's temp dir at a path that exists inside the container.
+    """Place mini-SWE-agent's writable sandbox under a container-visible path.
 
-    mini-swe-agent builds its writable sandbox under ``tempfile.gettempdir()``.
-    On HPC systems (e.g. NSCC) that resolves to a path under ``/export``, and
-    Apptainer then has to bind ``/export`` into the SWE-bench eval image when
-    running ``exec --writable <sandbox>``. Those images have no ``/export``
-    mount point and a ``--writable`` exec cannot auto-create one, so every
-    agent command fails with ``container creation failed`` and the run ends in
-    ``RepeatedFormatError`` with an empty ``model_patch``. Defaulting TMPDIR to
-    ``/tmp`` (present in every image) keeps the sandbox bindable; set
-    ``sandbox_tmpdir`` in the dataset config (or ``SBENCH_MINI_SANDBOX_TMPDIR``
-    in the environment) to override, or ``inherit`` to keep the inherited value.
+    mini-SWE-agent builds its writable sandbox under ``tempfile.gettempdir()``.
+    On HPC systems, that can resolve to ``/export``; SWE-bench eval images do
+    not include that mount point. Defaulting to ``/tmp`` keeps the sandbox
+    path container-visible. This is separate from inherited, configured, or
+    automatic-CWD Apptainer binds, which ``clear_apptainer_bind_env``, the
+    ``--no-mount bind-paths,cwd`` config override, and the `/tmp` process CWD
+    prevent. Set ``sandbox_tmpdir`` in the dataset config (or
+    ``SBENCH_MINI_SANDBOX_TMPDIR`` in the environment) to override, or
+    ``inherit`` to keep the inherited value.
     """
 
     requested = dataset_cfg.get("sandbox_tmpdir")
@@ -232,6 +233,28 @@ def apply_sandbox_tmpdir(env: dict[str, str], dataset_cfg: dict[str, Any]) -> No
         value = "/tmp"
     for key in ("TMPDIR", "TMP", "TEMP"):
         env[key] = value
+
+
+def clear_apptainer_bind_env(env: dict[str, str], dataset_cfg: dict[str, Any]) -> None:
+    """Prevent inherited Apptainer binds from breaking writable SWE-bench images."""
+
+    if str(dataset_cfg.get("environment_class", "docker")).lower() != "singularity":
+        return
+    for key in (
+        "APPTAINER_BIND",
+        "APPTAINER_BINDPATH",
+        "SINGULARITY_BIND",
+        "SINGULARITY_BINDPATH",
+    ):
+        env.pop(key, None)
+
+
+def mini_swe_working_directory(dataset_cfg: dict[str, Any]) -> str | None:
+    """Avoid binding an HPC `/export` working directory into a writable image."""
+
+    if str(dataset_cfg.get("environment_class", "docker")).lower() == "singularity":
+        return "/tmp"
+    return None
 
 
 def configure_openai_env(env: dict[str, str], api_base: str, model_id: str, dataset_cfg: dict[str, Any]) -> None:

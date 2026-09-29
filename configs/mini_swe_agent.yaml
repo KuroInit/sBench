@@ -12,12 +12,12 @@ metric_sample_steps: 200
 # of running one issue for every nominal worker. This gives real multi-agent
 # load up to 8 concurrent SWE instances without risking 64 Singularity jobs.
 issue_count_from_batch_size: true
-# mini-swe-agent builds its writable Apptainer sandbox under TMPDIR; on NSCC
-# that resolves under /export and `apptainer exec --writable` cannot bind
-# /export into the SWE-bench images (no /export mount point), so every agent
-# command fails. The runner therefore defaults TMPDIR to /tmp for the
-# singularity environment class. Override here if the node has a better path:
-# sandbox_tmpdir: /tmp        # or "inherit" to keep the job's TMPDIR
+# The NSCC Apptainer-compatible Singularity binary can automatically bind host
+# `/export` paths. SWE-bench images lack that destination, and a writable
+# sandbox cannot create it; every agent command then exits 255. The override
+# below disables configured bind paths and the automatic CWD bind. The runner
+# also clears inherited bind environment variables and starts mini-SWE-agent in
+# `/tmp`.
 max_issue_count: 8
 max_workers: 8
 min_success_rate: 1.0
@@ -33,7 +33,7 @@ custom_llm_provider: openai
 mini_swe_configs:
   - swebench.yaml
   - swebench_xml
-  - 'environment.exec_args=["--contain","--cleanenv"]'
+  - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd"]'
 
 # Qwen3.5 hybrid models default to a thinking response. mini-SWE-agent's
 # text-action parser needs its XML action in the visible message content.
@@ -42,13 +42,13 @@ model_overrides:
     mini_swe_configs:
       - swebench.yaml
       - swebench_xml
-      - 'environment.exec_args=["--contain","--cleanenv"]'
+      - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd"]'
       - configs/mini_swe_agent_qwen_nonthinking.yaml
   qwen3_6_27b:
     mini_swe_configs:
       - swebench.yaml
       - swebench_xml
-      - 'environment.exec_args=["--contain","--cleanenv"]'
+      - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd"]'
       - configs/mini_swe_agent_qwen_nonthinking.yaml
 extra_args: ["--redo-existing"]
 
@@ -62,7 +62,7 @@ extra_args: ["--redo-existing"]
 # mini_swe_configs:
 #   - swebench.yaml
 #   - swebench_xml
-#   - 'environment.exec_args=["--contain","--cleanenv"]'
+#   - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd"]'
 # timeout_seconds: 14400
 # expected_output_globs: ["*.json", "*.jsonl", "preds*", "predictions*"]
 # instance_ids:

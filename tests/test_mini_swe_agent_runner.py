@@ -200,6 +200,31 @@ def test_sandbox_tmpdir_leaves_docker_alone_and_honors_overrides(monkeypatch):
     assert env_override["TMPDIR"] == "/scratch/mswea"
 
 
+def test_clears_inherited_apptainer_binds_for_singularity():
+    from sbench.mini_swe_agent_runner import clear_apptainer_bind_env
+
+    env = {
+        "APPTAINER_BIND": "/export",
+        "APPTAINER_BINDPATH": "/export",
+        "SINGULARITY_BIND": "/export",
+        "SINGULARITY_BINDPATH": "/export",
+        "KEEP": "value",
+    }
+    clear_apptainer_bind_env(env, {"environment_class": "singularity"})
+    assert env == {"KEEP": "value"}
+
+    docker_env = {"APPTAINER_BIND": "/export"}
+    clear_apptainer_bind_env(docker_env, {"environment_class": "docker"})
+    assert docker_env == {"APPTAINER_BIND": "/export"}
+
+
+def test_uses_tmp_as_the_singularity_process_working_directory():
+    from sbench.mini_swe_agent_runner import mini_swe_working_directory
+
+    assert mini_swe_working_directory({"environment_class": "singularity"}) == "/tmp"
+    assert mini_swe_working_directory({"environment_class": "docker"}) is None
+
+
 def test_expected_prediction_count_honors_slice_extra_args():
     assert expected_prediction_count({"extra_args": ["--slice", "0:8"]}) == 8
     assert expected_prediction_count({"extra_args": ["--slice=23"]}) == 1
