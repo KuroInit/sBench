@@ -43,7 +43,7 @@ def test_builds_singularity_command_and_instance_filter(tmp_path):
     command = build_mini_swe_agent_command(model_id="Qwen/Test", batch_size=1, dataset_cfg=cfg, output_dir=Path(tmp_path))
     assert command[command.index("--environment-class") + 1] == "singularity"
     assert command[command.index("--model") + 1] == "openai/local-model"
-    assert command[-2:] == ["-i", "sympy__sympy-15599"]
+    assert command[-2:] == ["--filter", "^sympy__sympy\\-15599$"]
 
 
 def test_issue_count_becomes_a_single_issue_slice(tmp_path):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -135,10 +136,14 @@ def build_mini_swe_agent_command(
         command.extend(["-c", config_name])
     for config_spec in mini_swe_local_model_config_args(dataset_cfg, openai_api_base):
         command.extend(["-c", config_spec])
-    instance_ids = dataset_cfg.get("instance_ids")
+    instance_ids = [
+        str(instance_id)
+        for instance_id in dataset_cfg.get("instance_ids") or []
+        if str(instance_id).strip()
+    ]
     if instance_ids:
-        for instance_id in instance_ids:
-            command += ["-i", str(instance_id)]
+        pattern = "|".join(re.escape(instance_id) for instance_id in instance_ids)
+        command += ["--filter", f"^(?:{pattern})$" if len(instance_ids) > 1 else f"^{pattern}$"]
     extra_args = dataset_cfg.get("extra_args") or []
     issue_count = effective_issue_count(dataset_cfg, batch_size)
     if issue_count is not None and not instance_ids and slice_from_extra_args(extra_args) is None:
