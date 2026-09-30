@@ -25,12 +25,13 @@ dcgm:
 sglang_server_flags:
   - --disable-custom-all-reduce
   - --disable-radix-cache
+  - --reasoning-parser: qwen3
 
 models:
   # Sweep roster — the ONLY models this sweep may contain. To remove a model
   # from the active sweep, comment out its block; never delete entries.
   #
-  # Currently active: one MoE + one dense counterpart (Qwen3-30B-A3B, Qwen3-32B).
+  # Currently active: all listed Qwen models except the commented-out Moonlight model.
 
   # Qwen3-14B: Dense / non-MoE. Standard Qwen3 GQA-style transformer; full attention.
   - id: Qwen/Qwen3-14B
@@ -39,7 +40,7 @@ models:
     sglang_server_flags:
     - --served-model-name: qwen3_14b
     - --dtype: bfloat16
-    - --context-length: 16384
+    - --context-length: 32768
     - --chunked-prefill-size: 16384
     - --max-prefill-tokens: 16384
     - --mem-fraction-static: 0.90
@@ -51,7 +52,7 @@ models:
     sglang_server_flags:
       - --served-model-name: qwen3_32b
       - --dtype: bfloat16
-      - --context-length: 16384
+      - --context-length: 32768
       - --chunked-prefill-size: 16384
       - --max-prefill-tokens: 16384
       - --mem-fraction-static: 0.90
@@ -63,7 +64,7 @@ models:
     sglang_server_flags:
       - --served-model-name: qwen3_30b_a3b
       - --dtype: bfloat16
-      - --context-length: 16384
+      - --context-length: 32768
       - --chunked-prefill-size: 16384
       - --max-prefill-tokens: 16384
       - --mem-fraction-static: 0.90
@@ -75,7 +76,7 @@ models:
     sglang_server_flags:
     - --served-model-name: qwen3_5_9b
     - --dtype: bfloat16
-    - --context-length: 16384
+    - --context-length: 32768
     - --chunked-prefill-size: 16384
     - --max-prefill-tokens: 16384
     - --mem-fraction-static: 0.90
@@ -87,7 +88,7 @@ models:
     sglang_server_flags:
     - --served-model-name: qwen3_6_27b
     - --dtype: bfloat16
-    - --context-length: 16384
+    - --context-length: 32768
     - --chunked-prefill-size: 16384
     - --max-prefill-tokens: 16384
     - --mem-fraction-static: 0.90
@@ -99,7 +100,7 @@ models:
     sglang_server_flags:
     - --served-model-name: qwen3_6_35b_a3b
     - --dtype: bfloat16
-    - --context-length: 16384
+    - --context-length: 32768
     - --chunked-prefill-size: 16384
     - --max-prefill-tokens: 16384
     - --mem-fraction-static: 0.90
