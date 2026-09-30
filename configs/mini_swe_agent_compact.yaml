@@ -1,0 +1,16 @@
+# Canary-only controls to slow prompt-history growth.
+# Keep each run short while validating model/parser/server behavior.
+step_limit: 30
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    {{ output.exception_info }}
+    {% endif -%}
+    {{ output.returncode }}
+    {% if output.output | length < 2000 -%}
+    {{ output.output }}
+    {%- else -%}
+    {{ output.output[:1000] }}
+    ... command output truncated ...
+    {{ output.output[-1000:] }}
+    {%- endif %}

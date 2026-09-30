@@ -88,7 +88,12 @@ class BuildCanaryConfigTests(unittest.TestCase):
 
         self.assertEqual(
             config["mini_swe_configs"],
-            ["swebench.yaml", "swebench_xml", "configs/mini_swe_agent_qwen_nonthinking.yaml"],
+            [
+                "swebench.yaml",
+                "swebench_xml",
+                "configs/mini_swe_agent_qwen_nonthinking.yaml",
+                "configs/mini_swe_agent_compact.yaml",
+            ],
         )
         self.assertNotIn("model_overrides", config)
 

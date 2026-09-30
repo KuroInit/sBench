@@ -74,6 +74,15 @@ def build_canary_config(
     config["max_issue_count"] = 1
     config["max_workers"] = 1
     config["mini_model_name"] = model_name or f"openai/{model_id}"
+    mini_swe_configs = config.get("mini_swe_configs") or []
+    if isinstance(mini_swe_configs, str):
+        mini_swe_configs = [mini_swe_configs]
+    else:
+        mini_swe_configs = list(mini_swe_configs)
+    compact_config = "configs/mini_swe_agent_compact.yaml"
+    if compact_config not in mini_swe_configs:
+        mini_swe_configs.append(compact_config)
+    config["mini_swe_configs"] = mini_swe_configs
     if str(config.get("environment_class", "docker")).lower() == "singularity":
         config.setdefault("sandbox_tmpdir", "/tmp")
     return config
