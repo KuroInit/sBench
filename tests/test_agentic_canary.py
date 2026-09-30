@@ -51,6 +51,21 @@ class CheckServerTests(unittest.TestCase):
 
 
 class BuildCanaryConfigTests(unittest.TestCase):
+    def test_agentic_singularity_config_disables_export_host_mount(self):
+        from pathlib import Path
+        import yaml
+
+        config_path = Path(__file__).parents[1] / "configs" / "mini_swe_agent.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        expected = 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd,hostfs,/export"]'
+
+        config_lists = [config["mini_swe_configs"]]
+        config_lists.extend(
+            override["mini_swe_configs"] for override in config["model_overrides"].values()
+        )
+        for config_list in config_lists:
+            self.assertIn(expected, config_list)
+
     def test_selects_exactly_one_issue_and_enforces_singularity_tmpdir(self):
         source = {
             "environment_class": "singularity",
