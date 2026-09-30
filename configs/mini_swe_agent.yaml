@@ -33,7 +33,7 @@ custom_llm_provider: openai
 mini_swe_configs:
   - swebench.yaml
   - swebench_xml
-  - 'environment.exec_args=["--contain","--cleanenv","--underlay","--no-mount","bind-paths,cwd,hostfs,/export"]'
+  - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd,hostfs,/export"]'
 
 # Qwen3.5 hybrid models default to a thinking response. mini-SWE-agent's
 # text-action parser needs its XML action in the visible message content.
@@ -42,13 +42,13 @@ model_overrides:
     mini_swe_configs:
       - swebench.yaml
       - swebench_xml
-      - 'environment.exec_args=["--contain","--cleanenv","--underlay","--no-mount","bind-paths,cwd,hostfs,/export"]'
+      - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd,hostfs,/export"]'
       - configs/mini_swe_agent_qwen_nonthinking.yaml
   qwen3_6_27b:
     mini_swe_configs:
       - swebench.yaml
       - swebench_xml
-      - 'environment.exec_args=["--contain","--cleanenv","--underlay","--no-mount","bind-paths,cwd,hostfs,/export"]'
+      - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd,hostfs,/export"]'
       - configs/mini_swe_agent_qwen_nonthinking.yaml
 extra_args: ["--redo-existing"]
 
@@ -62,7 +62,7 @@ extra_args: ["--redo-existing"]
 # mini_swe_configs:
 #   - swebench.yaml
 #   - swebench_xml
-#   - 'environment.exec_args=["--contain","--cleanenv","--underlay","--no-mount","bind-paths,cwd,hostfs,/export"]'
+#   - 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd,hostfs,/export"]'
 # timeout_seconds: 14400
 # expected_output_globs: ["*.json", "*.jsonl", "preds*", "predictions*"]
 # instance_ids:

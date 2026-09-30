@@ -57,7 +57,7 @@ class BuildCanaryConfigTests(unittest.TestCase):
 
         config_path = Path(__file__).parents[1] / "configs" / "mini_swe_agent.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        expected = 'environment.exec_args=["--contain","--cleanenv","--underlay","--no-mount","bind-paths,cwd,hostfs,/export"]'
+        expected = 'environment.exec_args=["--contain","--cleanenv","--no-mount","bind-paths,cwd,hostfs,/export"]'
 
         config_lists = [config["mini_swe_configs"]]
         config_lists.extend(
