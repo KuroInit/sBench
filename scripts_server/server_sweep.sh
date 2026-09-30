@@ -27,8 +27,8 @@ echo "================"
 
 source "${ENV_FILE}"
 
-# Python environment: activate the configured conda env; fall back to a
-# venv under VENV_DIR when conda is unavailable.
+# Python environment: activate the configured conda env; if conda is unavailable,
+# use an already-provisioned venv. Never create an empty env or install packages here.
 USING_CONDA=0
 if [[ -n "${SBENCH_CONDA_ENV:-}" ]]; then
   if [[ -f "${SBENCH_CONDA_BASE}/etc/profile.d/conda.sh" ]]; then
@@ -38,28 +38,17 @@ if [[ -n "${SBENCH_CONDA_ENV:-}" ]]; then
     USING_CONDA=1
     echo "=== Activated conda env '${SBENCH_CONDA_ENV}' ($(which python)) ==="
   else
-    echo "[server] WARNING: conda.sh not found at ${SBENCH_CONDA_BASE}; falling back to venv" >&2
+    echo "[server] WARNING: conda.sh not found at ${SBENCH_CONDA_BASE}; checking for a pre-provisioned venv" >&2
   fi
 fi
 
 if [[ "${USING_CONDA}" == "0" ]]; then
   if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
-    PYTHON_BIN="$(command -v python3.12 || command -v python3)"
-    echo "=== Creating virtualenv at ${VENV_DIR} with ${PYTHON_BIN} ==="
-    "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+    echo "[server] ERROR: no conda environment activated and no pre-provisioned venv at ${VENV_DIR}; install dependencies separately" >&2
+    exit 1
   fi
   # shellcheck disable=SC1091
   source "${VENV_DIR}/bin/activate"
-fi
-
-# Pinned requirements: installed once, tracked by a marker outside the env.
-DEPS_MARKER="${RUN_DIR}/.sbench-deps"
-mkdir -p "${RUN_DIR}"
-if [[ ! -f "${DEPS_MARKER}" ]]; then
-  echo "=== Installing pinned requirements (one-time; large download) ==="
-  python -m pip install --upgrade pip
-  python -m pip install -r "${REPO_DIR}/requirements.txt"
-  touch "${DEPS_MARKER}"
 fi
 
 # CUDA toolkit (nvcc) is needed to JIT-compile FlashInfer/Triton kernels.

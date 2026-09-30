@@ -59,11 +59,12 @@ Python 3.10+ (3.12 preferred):
 nohup bash scripts_server/server_sweep.sh > server_sweep.log 2>&1 &
 ```
 
-`server_sweep.sh` is the standalone equivalent of `scripts/nscc_job.pbs`. On
-first run it creates a virtualenv under `SBENCH_SERVER_BASE` (default
-`~/sbench_data`), installs `requirements.txt`, and then runs the orchestrator
-and analyzer exactly as on NSCC — outputs land in `${RESULTS_DIR}` with the
-same layout, checkpointing, and validation flow.
+`server_sweep.sh` is the standalone equivalent of `scripts/nscc_job.pbs`. It
+activates the configured conda environment, or uses a pre-provisioned venv if
+conda is unavailable. It does not create an environment or install/update Python
+packages; provision the required dependencies separately before running. It then
+runs the orchestrator and analyzer exactly as on NSCC — outputs land in
+`${RESULTS_DIR}` with the same layout, checkpointing, and validation flow.
 
 Notes:
 - `SBENCH_GPU_TYPE` is auto-detected from `nvidia-smi`; override it in
