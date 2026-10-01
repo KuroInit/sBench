@@ -230,7 +230,7 @@ def test_dense_model_strips_moe_expert_probe_flags():
     assert not model_uses_moe(model, hf_config)
 
 
-def test_moe_model_gets_routed_expert_capture_flag():
+def test_moe_model_gets_supported_expert_distribution_recorder_flags():
     config = {"sglang_server_flags": ["--disable-custom-all-reduce"]}
     model = {"id": "Qwen/Qwen3-30B-A3B", "slug": "qwen3_30b_a3b", "tp": 4}
     hf_config = {
@@ -248,7 +248,9 @@ def test_moe_model_gets_routed_expert_capture_flag():
     flags = merged_sglang_server_flags(config, model, hf_config)
     flat_flags = [flag for flag, _ in iter_sglang_server_flags(flags)]
     assert "--disable-custom-all-reduce" in flat_flags
+    assert "--expert-distribution-recorder-mode" in flat_flags
     assert "--enable-return-routed-experts" in flat_flags
+    assert "--enable-expert-distribution-metrics" not in flat_flags
     assert model_uses_moe(model, hf_config)
 
 

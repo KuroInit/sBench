@@ -34,7 +34,6 @@ EXPERT_RECORDING_FLAGS = {
 }
 DEFAULT_MOE_PROBE_FLAGS = (
     "--enable-return-routed-experts",
-    "--enable-expert-distribution-metrics",
 )
 
 
@@ -763,6 +762,7 @@ def resolve_expert_probe_flags(flags: Any, model: dict[str, Any], hf_config: dic
     if model_uses_moe(model, hf_config):
         for flag in DEFAULT_MOE_PROBE_FLAGS:
             ordered.setdefault(flag, True)
+        ordered.setdefault("--expert-distribution-recorder-mode", "stat")
     else:
         for flag in EXPERT_RECORDING_FLAGS:
             ordered.pop(flag, None)

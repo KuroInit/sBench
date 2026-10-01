@@ -20,8 +20,8 @@ dcgm:
   interval_ms: 25
   fields: [1001, 1002, 1003, 1004, 1005]   # GR_ENGINE/SM_ACTIVE/SM_OCCUPANCY/TENSOR/DRAM
 
-# Remote GPU server defaults (single node, 2 GPUs per model):
-# - All models run with tp: 2.
+# Remote GPU server defaults (single node, 2 x NVIDIA A100 PCIe 80GB per model):
+# - All models run with tp: 2 (two-way tensor parallelism, one rank per GPU).
 sglang_server_flags:
   - --disable-custom-all-reduce
   - --disable-radix-cache
