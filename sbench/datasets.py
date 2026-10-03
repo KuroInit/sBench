@@ -241,12 +241,10 @@ def _apply_chat_token_limit(requests: list[BenchmarkRequest], config: dict[str, 
         messages = _trim_messages_to_token_limit(tokenizer, request.messages, max_tokens)
         if not messages:
             continue
-        token_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
-        if hasattr(token_ids, "tolist"):
-            token_ids = token_ids.tolist()
+        token_ids = _chat_template_token_ids(tokenizer, messages)
         capped.append(
             BenchmarkRequest(
-                input_ids=[int(token) for token in token_ids[-max_tokens:]],
+                input_ids=token_ids[-max_tokens:],
                 output_len=request.output_len,
                 uid=request.uid,
                 metadata=request.metadata,
@@ -255,12 +253,40 @@ def _apply_chat_token_limit(requests: list[BenchmarkRequest], config: dict[str, 
     return capped
 
 
+def _chat_template_token_ids(tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
+    """Normalize tokenizer chat-template outputs to one sequence of token IDs."""
+    value = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+    if isinstance(value, dict):
+        value = value.get("input_ids")
+    elif hasattr(value, "input_ids"):
+        value = value.input_ids
+    if hasattr(value, "ids"):
+        value = value.ids
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        first = value[0]
+        if hasattr(first, "ids") or isinstance(first, (list, tuple)):
+            return _chat_template_token_ids_from_sequence(first)
+    return _chat_template_token_ids_from_sequence(value)
+
+
+def _chat_template_token_ids_from_sequence(value: Any) -> list[int]:
+    if hasattr(value, "ids"):
+        value = value.ids
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"chat template must return token IDs or an encoding, got {type(value).__name__}")
+    return [int(token) for token in value]
+
+
 def _trim_messages_to_token_limit(tokenizer: Any, messages: list[dict[str, str]], max_tokens: int) -> list[dict[str, str]]:
     """Discard oldest turns first while preserving a valid chat-template shape."""
 
     trimmed = _normalize_chat_messages(messages)
     while len(trimmed) > 1:
-        token_ids = tokenizer.apply_chat_template(trimmed, tokenize=True, add_generation_prompt=True)
+        token_ids = _chat_template_token_ids(tokenizer, trimmed)
         if len(token_ids) <= max_tokens:
             return trimmed
         trimmed = _drop_oldest_turn(trimmed)

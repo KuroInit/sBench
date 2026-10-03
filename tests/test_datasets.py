@@ -77,6 +77,24 @@ def test_sharegpt_context_cap_uses_model_chat_template(tmp_path, monkeypatch):
     assert request.input_ids == [1, 2, 3]
 
 
+def test_sharegpt_context_cap_accepts_tokenizer_encoding_results(tmp_path, monkeypatch):
+    class Encoding:
+        def __init__(self, ids):
+            self.ids = ids
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **_kwargs):
+            ids = list(range(sum(len(item["content"].split()) for item in messages) + 1))
+            return [Encoding(ids)]
+
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *_args, **_kwargs: Tokenizer())
+    path = tmp_path / "sharegpt.json"
+    path.write_text(json.dumps([{"conversations": [{"from": "human", "value": "old turn words"}, {"from": "gpt", "value": "answer"}, {"from": "human", "value": "latest question words"}]}]))
+    monkeypatch.setenv("S_MFU_SHAREGPT_PATH", str(path))
+    request = load_sharegpt({"model_id": "Qwen/Test", "max_input_tokens": 4}, limit=1)[0]
+    assert request.input_ids == [0, 1, 2, 3]
+
+
 def test_sharegpt_context_trim_preserves_user_first_role_order(tmp_path, monkeypatch):
     seen_roles = []
 

@@ -1,9 +1,10 @@
 batch_sizes: [2, 4, 8, 16, 32, 64, 128]
+# ShareGPT-only run; other dataset lanes are temporarily disabled.
 benchmark_types:
-  prefill: [batched_prefill]
+  prefill: []
   chat: [sharegpt]
-  reasoning: [mmlu_pro]
-  agentic: [mini_swe_agent]
+  reasoning: []
+  agentic: []
 port: 30000
 server_startup_timeout_seconds: 3600
 estimator_mode: component-wise
