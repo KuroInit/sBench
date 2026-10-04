@@ -461,6 +461,11 @@ def _extract_messages(row: dict[str, Any]) -> list[dict[str, str]]:
         return []
     out = []
     for item in raw:
+        if isinstance(item, str):
+            try:
+                item = json.loads(item)
+            except json.JSONDecodeError:
+                continue
         if not isinstance(item, dict):
             continue
         role = item.get("role") or item.get("from")

@@ -63,6 +63,25 @@ def test_mmlu_context_cap_rejects_semantically_destructive_truncation(tmp_path, 
         load_mmlu_pro({"model_id": "Qwen/Test", "max_input_tokens": 2}, limit=1)
 
 
+def test_sharegpt_loader_parses_json_encoded_conversation_turns(tmp_path, monkeypatch):
+    path = tmp_path / "sharegpt.json"
+    path.write_text(json.dumps([{"id": "sample-1", "conversations": [
+        json.dumps({"from": "human", "value": "What is 2 + 2?"}),
+        json.dumps({"from": "gpt", "value": "4"}),
+        json.dumps({"from": "human", "value": "Show the calculation."}),
+    ]}]))
+    monkeypatch.setenv("S_MFU_SHAREGPT_PATH", str(path))
+
+    requests = load_sharegpt({"target_output_tokens": 16}, limit=1)
+
+    assert len(requests) == 1
+    assert requests[0].messages == [
+        {"role": "user", "content": "What is 2 + 2?"},
+        {"role": "assistant", "content": "4"},
+        {"role": "user", "content": "Show the calculation."},
+    ]
+
+
 def test_sharegpt_context_cap_uses_model_chat_template(tmp_path, monkeypatch):
     class Tokenizer:
         def apply_chat_template(self, messages, **_kwargs):
